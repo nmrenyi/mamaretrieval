@@ -234,7 +234,48 @@ One JSON object per query. Output of `judge_relevance.py`.
 
 ---
 
-## 6. Corpus format
+## 6. Sampling strategy and priority
+
+### Why sample at all
+
+The corpus has 63,650 chunks across 87 sources. Generating queries for every chunk and labeling relevance at that scale would cost hundreds of dollars in API calls and weeks of labeling effort. The target of ~3,000 queries is chosen to be large enough to give reliable retriever rankings while remaining tractable.
+
+### Priority: relevance tier drives query budget
+
+Sources rated higher in `~/Downloads/mamai-medical-guidelines/source-research/rag-source-evaluation.md` receive a larger query budget. The tier weights and resulting query-per-source targets are:
+
+| Tier | Weight | Queries/source | Rationale |
+|------|--------|---------------|-----------|
+| Very High | 4× | 300 | Best setting fit; most clinically actionable for Zanzibar nurses |
+| High | 2.5× | 165 | Strong clinical content, LMIC-appropriate |
+| Moderate-High | 2× | 130 | Good clinical chapters; some narrative filler |
+| Moderate | 1.5× | 100 | Useful selectively; US/UK-centric or educator-framing |
+| Low-moderate | 1× | 65 | Limited clinical content; included for completeness |
+
+The weight ratios (e.g. Very High gets 4.6× more queries than Low-moderate) reflect how much more the evaluation should stress-test retrieval from high-value clinical sources. A retriever that misses a PPH dosing chunk from `msf` is a worse failure than missing an NMC OSCE rubric.
+
+### Within-source sampling: stratified by breadcrumb section
+
+Within each source, do not sample purely at random. Group chunks by their top-level breadcrumb section (e.g. "Postpartum Haemorrhage", "Neonatal Resuscitation"). Sample proportionally across sections so that no single chapter dominates. If a source has 10 sections and you need 150 chunks, sample ~15 from each section, adjusting for section size.
+
+Concretely in `sample_chunks.py`:
+1. Parse all chunks for the source.
+2. Group by first breadcrumb level (the first `>` segment, or `__root__` if no breadcrumb).
+3. Compute section weights proportional to section chunk count.
+4. Sample `n_chunks` using weighted random sampling without replacement across sections.
+5. Set `random.seed(42)` for reproducibility.
+
+This ensures the query set covers the full clinical scope of each source rather than over-sampling one large chapter.
+
+### Sources excluded from sampling
+
+All sources in the corpus that do NOT appear in `rag-source-evaluation.md`'s included list receive zero queries. This includes the core WHO/NICE/Tanzania clinical guideline PDFs in `raw/Clinical guidelines_International/` and `raw/Clinical guidelines_Zanzibar-Tanzania/`. These are excluded from query generation for now — they will be incorporated in a future mamaretrieval version once explicit relevance tiers are assigned to them.
+
+Sources explicitly excluded by `rag-source-evaluation.md` (rated Exclude or Not relevant) also receive zero queries regardless of their chunk count.
+
+---
+
+## 7. Corpus format
 
 The corpus lives at `~/Downloads/mamai-medical-guidelines/processed/chunks_for_rag.txt`. It is `<sep>`-delimited plaintext with 63,650 chunks total across 87 source PDFs.
 
@@ -255,7 +296,7 @@ Parsing logic:
 
 ---
 
-## 7. Script implementations
+## 8. Script implementations
 
 ### Phase 1a — `scripts/sample_chunks.py`
 
@@ -491,7 +532,7 @@ Verdict: [fit for purpose / expand pool]
 
 ---
 
-## 8. Release packaging
+## 9. Release packaging
 
 Once all phases are complete and the audit passes:
 
@@ -505,7 +546,7 @@ The `releases/mamaretrieval-v1/` directory is the artifact consumed by the evalu
 
 ---
 
-## 9. Key design decisions (rationale)
+## 10. Key design decisions (rationale)
 
 **No hand-written queries.** Hand-written queries were considered but skipped for resource reasons. Three mitigations are applied in the generation prompt: synthesis questions (cross-chunk), nurse voice (realistic phrasing), adversarial reformulations (abbreviations). See `~/Downloads/mamai-mamabench-docs/mamaretrieval.md` for full rationale. Residual caveat: dense-retriever scores may be optimistic; lead with MRR and Hit Rate rather than Recall@k.
 
@@ -519,7 +560,7 @@ The `releases/mamaretrieval-v1/` directory is the artifact consumed by the evalu
 
 ---
 
-## 10. Running order
+## 11. Running order
 
 ```bash
 python scripts/sample_chunks.py      # → data/sampled_chunks.jsonl
