@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local environment
+.env
+.env.*
+
+# Generated benchmark data
+data/*.jsonl
+data/audit/*.jsonl
+data/audit/*.md
+data/audit/query_ids.txt
+
+# Retrieval/index artifacts
+*.faiss
+*.index
+*.npy
+*.npz
+.cache/
+cache/
+
+# Logs and local outputs
+*.log
+tmp/
+dist/
+build/
+
+# macOS
+.DS_Store
+
