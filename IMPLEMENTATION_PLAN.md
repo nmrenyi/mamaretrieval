@@ -67,9 +67,42 @@ This script should:
 - Read `config.yaml`.
 - Parse the full corpus.
 - Filter to configured included sources only.
-- Remove boilerplate chunks.
-- Sample by tier quota with a fixed random seed.
+- Remove obvious boilerplate chunks before sampling.
+- Compute each source's chunk target from its tier query budget:
+  `ceil(queries_per_source / questions_per_chunk)`.
+- Cap sources with fewer usable chunks than their target and log the shortfall.
+- Group usable chunks within each source by top-level breadcrumb section.
+- Use `__root__` as the section for chunks without a breadcrumb.
+- Sample proportionally across those section groups without replacement.
+- Use the configured fixed random seed for reproducibility.
 - Write `data/sampled_chunks.jsonl`.
+
+Boilerplate filtering should be conservative and deterministic. Drop chunks that
+are clearly unsuitable for clinical query generation, including:
+
+- body text shorter than 100 characters
+- citation/front-matter chunks such as "Suggested citation", "Endorsed by",
+  "Acknowledgements", "Foreword", "References", and "Table of Contents"
+- copyright or license-only chunks
+- heading-only chunks with no meaningful body text
+
+Do not use an LLM for this filter. The first implementation should keep the
+rules cheap, inspectable, and easy to tune after reviewing sample outputs.
+
+Within-source stratification should use the first breadcrumb segment:
+
+```text
+Postpartum Haemorrhage > Active Management of Third Stage
+```
+
+maps to:
+
+```text
+Postpartum Haemorrhage
+```
+
+This grouping affects only which chunks are selected. Query generation still
+uses individual sampled chunks directly.
 
 Checkpoint:
 
@@ -77,6 +110,9 @@ Checkpoint:
 - `icm-essential-competencies-for-midwifery-practice` is capped because it has
   only 15 chunks.
 - Missing configured sources are logged as warnings.
+- The sampling report includes total, filtered, usable, target, sampled, and
+  shortfall counts per source.
+- Re-running with the same config and corpus produces identical output.
 - Output JSONL validates against the expected schema.
 
 ## Stage 4: Query Generation
