@@ -18,13 +18,14 @@ The current implementation follows:
 
 ## Current Status
 
-Stage 1 is scaffolded. The repository has project metadata, configuration,
-directories, and dependency declarations, but the parser and pipeline scripts are
-not implemented yet.
+Stages 1-2 are scaffolded. The repository has project metadata,
+configuration, dependency declarations, a reusable corpus parser, and a corpus
+inspection script.
 
 ## Planned Pipeline
 
 ```bash
+python scripts/inspect_corpus.py
 python scripts/sample_chunks.py
 python scripts/generate_queries.py
 python scripts/pool_candidates.py
@@ -44,4 +45,3 @@ The expected corpus is the `rag-bundle-v0.2.0` guideline bundle:
 - headers formatted as `<sep>[SOURCE:<source>|PAGE:<page>|CID:<chunk_id>]`
 
 The guideline repository is read-only for this project.
-
