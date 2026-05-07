@@ -172,7 +172,7 @@ and rejected sampled chunks.
 {
   "chunk_id": "dcaeb591065c7c22",
   "llm_filter_schema_version": "answerable-clinically-useful-v1",
-  "llm_filter_prompt_hash": "16a4fb380cf1355b",
+  "llm_filter_prompt_hash": "<prompt hash>",
   "query": "What dose of oxytocin is used for active management of third stage?",
   "reason": "Chunk gives the oxytocin dose and the question guides bedside care.",
   "answerable_by_chunk": true,
@@ -195,7 +195,7 @@ clinically useful.
   "breadcrumb": "Postpartum Haemorrhage > Active Management of Third Stage",
   "text": "...",
   "llm_filter_schema_version": "answerable-clinically-useful-v1",
-  "llm_filter_prompt_hash": "16a4fb380cf1355b",
+  "llm_filter_prompt_hash": "<prompt hash>",
   "seed_query": "What dose of oxytocin is used for active management of third stage?",
   "llm_answerable_by_chunk": true,
   "llm_clinically_useful": true,
@@ -405,6 +405,13 @@ The system prompt asks the model to do three things in order:
 3. Judge `answerable_by_chunk` and `clinically_useful` independently, with a
    reason explaining both judgments. The prompt limits the reason to `≤30`
    words.
+
+Educational or explanatory style is not itself a rejection reason. Explanatory
+clinical chunks can be clinically useful when they support counseling,
+assessment, prevention, risk recognition, diagnosis, management, or referral.
+Reject only non-clinical scaffolding, administration, bibliography, professional
+conduct / organization advice unrelated to patient counseling or care, and very
+sparse fragments.
 
 The model must return exactly one JSON object using one of these patterns:
 
