@@ -50,6 +50,8 @@ BOILERPLATE_HEADINGS = {
     "how to use this book",
     "facilitator's schedule and preparation activities",
     "reflection on the trigger scenario",
+    "web resources for clinicians",
+    "web resources",
 }
 
 STRUCTURAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -88,6 +90,7 @@ class SampledChunk:
             "chunk_id": self.chunk.chunk_id,
             "source": self.chunk.source,
             "tier": self.tier,
+            "section": self.section,
             "page": self.chunk.page,
             "breadcrumb": self.chunk.breadcrumb,
             "text": self.chunk.text,
@@ -173,6 +176,9 @@ def boilerplate_reason(chunk: CorpusChunk) -> str | None:
 
     if _is_heading_only(text):
         return "heading_only"
+
+    if _is_empty_form_table(text):
+        return "empty_form_table"
 
     return None
 
@@ -383,6 +389,16 @@ def _normalise_heading(line: str) -> str:
     line = line.strip("*_ ")
     line = re.sub(r"[:.]+$", "", line)
     return re.sub(r"\s+", " ", line).lower()
+
+
+def _is_empty_form_table(text: str) -> bool:
+    """Return True if the chunk is a fill-in template with mostly empty table rows."""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    table_lines = [l for l in lines if l.startswith("|")]
+    if len(table_lines) < 4:
+        return False
+    empty_rows = sum(1 for l in table_lines if not re.sub(r"[|\s-]", "", l))
+    return empty_rows / len(table_lines) > 0.5
 
 
 def _plain_text(text: str) -> str:
