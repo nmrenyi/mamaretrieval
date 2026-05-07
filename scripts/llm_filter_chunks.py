@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """LLM-based chunk filter.
 
-For each sampled chunk, asks a local LLM to understand the chunk, generate a
-clinical query it can answer, and judge whether the query is answerable and
-clinically useful. Chunks passing both checks are kept.
+For each sampled chunk, asks a local LLM to understand the chunk, judge whether
+it is clinically relevant, and generate a grounded clinical seed query only for
+relevant chunks. Chunks with non-null queries are kept.
 
 Usage:
     python scripts/llm_filter_chunks.py                  # full run

@@ -143,7 +143,10 @@ audit:
   n_retrievers_exhaustive: 6      # minimum retrievers for audit pool
 ```
 
-The `queries_per_source` values are targets. For sources with fewer chunks than required (e.g. `icm-essential-competencies-for-midwifery-practice` has only 15 chunks), cap at `n_chunks × 3` and note the shortfall.
+The `queries_per_source` values are targets. For sources with fewer usable
+chunks than required, sample all usable chunks and note the shortfall. With
+`questions_per_chunk: 1`, each sampled chunk can contribute at most one
+per-chunk seed query before synthesis and adversarial additions.
 
 ---
 
@@ -171,19 +174,19 @@ and rejected sampled chunks.
 ```json
 {
   "chunk_id": "dcaeb591065c7c22",
-  "llm_filter_schema_version": "answerable-clinically-useful-v1",
+  "llm_filter_schema_version": "query-reason-v1",
   "llm_filter_prompt_hash": "<prompt hash>",
+  "llm_backend": "openai",
+  "llm_model": "Qwen/Qwen3.6-27B-FP8",
   "query": "What dose of oxytocin is used for active management of third stage?",
-  "reason": "Chunk gives the oxytocin dose and the question guides bedside care.",
-  "answerable_by_chunk": true,
-  "clinically_useful": true
+  "reason": "Chunk gives clinically relevant guidance for active third-stage management."
 }
 ```
 
 ### `data/llm_filtered_chunks.jsonl`
 One JSON object per line. Output of `llm_filter_chunks.py`. This contains only
-sampled chunks whose generated seed query is both answerable by the chunk and
-clinically useful.
+sampled chunks with a non-null LLM-generated seed query after the clinical
+relevance gate.
 
 ```json
 {
@@ -194,12 +197,12 @@ clinically useful.
   "page": 14,
   "breadcrumb": "Postpartum Haemorrhage > Active Management of Third Stage",
   "text": "...",
-  "llm_filter_schema_version": "answerable-clinically-useful-v1",
+  "llm_filter_schema_version": "query-reason-v1",
   "llm_filter_prompt_hash": "<prompt hash>",
+  "llm_backend": "openai",
+  "llm_model": "Qwen/Qwen3.6-27B-FP8",
   "seed_query": "What dose of oxytocin is used for active management of third stage?",
-  "llm_answerable_by_chunk": true,
-  "llm_clinically_useful": true,
-  "llm_filter_reason": "Chunk gives the oxytocin dose and the question guides bedside care."
+  "llm_filter_reason": "Chunk gives clinically relevant guidance for active third-stage management."
 }
 ```
 
@@ -385,9 +388,8 @@ Parsing logic:
 
 ### Phase 1b — `scripts/llm_filter_chunks.py`
 
-**Purpose:** Call a local LLM for each sampled chunk to generate one seed query
-and reject chunks whose seed query is not both answerable by that chunk and
-clinically useful.
+**Purpose:** Call a local LLM for each sampled chunk to apply a clinical
+relevance gate and generate one grounded seed query for chunks that pass.
 
 **Input:** `data/sampled_chunks.jsonl`
 
@@ -399,12 +401,13 @@ The system prompt asks the model to do three things in order:
 
 1. Carefully understand the chunk's clinical topic, guidance, purpose, and
    completeness.
-2. Generate exactly one clinical question a practicing midwife or nurse would
-   type into a clinical reference system. The prompt limits the question to
-   `≤20` words.
-3. Judge `answerable_by_chunk` and `clinically_useful` independently, with a
-   reason explaining both judgments. The prompt limits the reason to `≤30`
-   words.
+2. Judge whether the chunk is clinically relevant before writing a query. For
+   chunks that are not clinically relevant, return `query=null`.
+3. For clinically relevant chunks, generate exactly one grounded clinical
+   question a practicing midwife or nurse would type into a clinical reference
+   system. The prompt limits the question to `≤20` words.
+4. Write a reason explaining the clinical relevance decision. The prompt limits
+   the reason to `≤30` words.
 
 Educational or explanatory style is not itself a rejection reason. Explanatory
 clinical chunks can be clinically useful when they support counseling,
@@ -416,21 +419,19 @@ sparse fragments.
 The model must return exactly one JSON object using one of these patterns:
 
 ```json
-{"query": "<question ≤20 words>", "reason": "<≤30 words>", "answerable_by_chunk": true, "clinically_useful": true}
-{"query": "<question ≤20 words>", "reason": "<≤30 words>", "answerable_by_chunk": true, "clinically_useful": false}
-{"query": "<question ≤20 words>", "reason": "<≤30 words>", "answerable_by_chunk": false, "clinically_useful": true}
-{"query": null, "reason": "<≤30 words>", "answerable_by_chunk": false, "clinically_useful": false}
+{"query": "<question ≤20 words>", "reason": "<≤30 words>"}
+{"query": null, "reason": "<≤30 words>"}
 ```
 
-Keep only chunks where both `answerable_by_chunk` and `clinically_useful` are
-true. For kept chunks, copy the sampled chunk record and add `seed_query`,
-`llm_answerable_by_chunk`, `llm_clinically_useful`, `llm_filter_reason`,
-`llm_filter_schema_version`, and `llm_filter_prompt_hash`.
+Keep only chunks where `query` is non-null. For kept chunks, copy the sampled
+chunk record and add `seed_query`, `llm_filter_reason`,
+`llm_filter_schema_version`, `llm_filter_prompt_hash`, `llm_backend`, and
+`llm_model`.
 
 `--resume` must only reuse previous judgments with the current
-`llm_filter_schema_version` and `llm_filter_prompt_hash`; older `suitable`
-records, output records, or records from a previous prompt are stale and must
-be ignored.
+`llm_filter_schema_version`, `llm_filter_prompt_hash`, backend, and model;
+older `suitable` records, old boolean-schema records, output records, or
+records from a previous prompt/backend/model are stale and must be ignored.
 
 ### Phase 1c — `scripts/generate_queries.py`
 

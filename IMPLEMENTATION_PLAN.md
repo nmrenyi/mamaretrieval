@@ -137,18 +137,21 @@ chunk, the model should:
 
 - carefully understand the chunk's clinical topic, guidance, purpose, and
   completeness
-- generate exactly one clinical seed query, with the prompt-level limit of
-  `≤20` words
-- write a reason explaining answerability and clinical usefulness, with the
+- judge whether the chunk is clinically relevant before writing a query
+- return `query=null` for non-clinical scaffolding, administration,
+  bibliography, professional conduct / organization advice unrelated to patient
+  counseling or care, and very sparse fragments
+- generate exactly one grounded clinical seed query for clinically relevant
+  chunks, with the prompt-level limit of `≤20` words
+- write a reason explaining the clinical relevance decision, with the
   prompt-level limit of `≤30` words
-- independently judge `answerable_by_chunk` and `clinically_useful`
 
-Keep a chunk only when both `answerable_by_chunk` and `clinically_useful` are
-true. Write all judgments to `data/llm_filter_results.jsonl`, and write kept
-chunks to `data/llm_filtered_chunks.jsonl` with `seed_query`,
-`llm_answerable_by_chunk`, `llm_clinically_useful`, `llm_filter_reason`, the
-result schema version, and the prompt hash. Resume logic must only reuse
-judgments and kept output records that match the current schema and prompt hash.
+Keep a chunk only when the returned `query` is non-null. Write all judgments to
+`data/llm_filter_results.jsonl`, and write kept chunks to
+`data/llm_filtered_chunks.jsonl` with `seed_query`, `llm_filter_reason`, the
+result schema version, prompt hash, backend, and model. Resume logic must only
+reuse judgments and kept output records that match the current schema, prompt
+hash, backend, and model.
 
 Then implement query assembly:
 
@@ -198,9 +201,9 @@ fixed curated guideline corpus.
 Checkpoint:
 
 - `data/llm_filter_results.jsonl` is valid JSONL using the current
-  `query` / `reason` / `answerable_by_chunk` / `clinically_useful` schema.
-- `data/llm_filtered_chunks.jsonl` contains only chunks that passed both LLM
-  checks.
+  `query` / `reason` schema.
+- `data/llm_filtered_chunks.jsonl` contains only chunks with non-null
+  `seed_query` values after the LLM clinical relevance gate.
 - `data/queries.jsonl` is valid JSONL.
 - `query_id` values are stable and sequential.
 - `seed_chunk_ids` are preserved for synthesis queries.
