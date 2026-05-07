@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Capture one full Ollama chat response, including model thinking.
+"""Capture one full LLM chat response, including model thinking.
 
 This is a diagnostic helper for inspecting whether a thinking-enabled Qwen run
 actually reaches a final JSON answer for a sampled chunk.
@@ -9,12 +9,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
 
-from llm_filter_chunks import DEFAULT_MODEL, SYSTEM_PROMPT
+from llm_filter_chunks import (
+    DEFAULT_OLLAMA_MODEL,
+    DEFAULT_OPENAI_MODEL,
+    OLLAMA_URL,
+    OPENAI_BASE_URL,
+    SYSTEM_PROMPT,
+    _openai_chat_url,
+    _resolve_model,
+)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -24,17 +35,27 @@ def _parse_args() -> argparse.Namespace:
                         help="1-based line number in the JSONL input.")
     parser.add_argument("--chunk-id", default="",
                         help="Optional chunk_id override. If set, --chunk-line is ignored.")
-    parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--url", default="http://127.0.0.1:11434/api/chat")
+    parser.add_argument("--backend", choices=["ollama", "openai"], default="ollama",
+                        help="LLM serving backend. Use openai for vLLM/SGLang.")
+    parser.add_argument("--model", default=None,
+                        help=f"Model name. Defaults to {DEFAULT_OLLAMA_MODEL} for Ollama and {DEFAULT_OPENAI_MODEL} for OpenAI-compatible backends.")
+    parser.add_argument("--url", default=OLLAMA_URL,
+                        help=f"Ollama chat endpoint. Default {OLLAMA_URL}.")
+    parser.add_argument("--base-url", default=OPENAI_BASE_URL,
+                        help=f"OpenAI-compatible base URL. Default {OPENAI_BASE_URL}.")
+    parser.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY", "EMPTY"),
+                        help="OpenAI-compatible API key. vLLM commonly accepts EMPTY.")
     parser.add_argument("--output-prefix", default="data/qwen35_9b_thinking_example")
-    parser.add_argument("--num-predict", type=int, default=32768)
+    parser.add_argument("--num-predict", type=int, default=16384)
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--timeout", type=int, default=3600)
     parser.add_argument("--no-think", action="store_true",
                         help="Disable thinking; thinking is enabled by default.")
     parser.add_argument("--no-format-json", action="store_true",
-                        help="Do not request Ollama JSON-mode formatting.")
+                        help="Do not request backend JSON-mode formatting.")
+    parser.add_argument("--pretty-only", action="store_true",
+                        help="Write only the pretty text output, not raw events or full JSON.")
     return parser.parse_args()
 
 
@@ -61,18 +82,9 @@ def _build_user_content(chunk: dict[str, Any]) -> str:
     return f"Chunk:\n{text}"
 
 
-def main() -> int:
-    args = _parse_args()
-    input_path = Path(args.input)
-    prefix = Path(args.output_prefix)
-    prefix.parent.mkdir(parents=True, exist_ok=True)
-
-    chunk = _read_chunk(input_path, args.chunk_line, args.chunk_id)
-    text = chunk.get("text", "").strip()
-    user_content = _build_user_content(chunk)
-
+def _build_ollama_payload(args: argparse.Namespace, model: str, user_content: str) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "model": args.model,
+        "model": model,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
@@ -87,11 +99,31 @@ def main() -> int:
     }
     if not args.no_format_json:
         payload["format"] = "json"
+    return payload
 
-    raw_path = Path(f"{prefix}_raw_events.jsonl")
-    full_path = Path(f"{prefix}_full.json")
-    pretty_path = Path(f"{prefix}_pretty.txt")
 
+def _build_openai_payload(args: argparse.Namespace, model: str, user_content: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        "temperature": args.temperature,
+        "top_p": args.top_p,
+        "max_tokens": args.num_predict,
+        "chat_template_kwargs": {"enable_thinking": not args.no_think},
+    }
+    if not args.no_format_json:
+        payload["response_format"] = {"type": "json_object"}
+    return payload
+
+
+def _capture_ollama(
+    args: argparse.Namespace,
+    payload: dict[str, Any],
+    raw_path: Path,
+) -> tuple[str, str, int, dict[str, Any] | None]:
     req = urllib.request.Request(
         args.url,
         data=json.dumps(payload).encode("utf-8"),
@@ -102,17 +134,20 @@ def main() -> int:
     content_parts: list[str] = []
     event_count = 0
     last_event: dict[str, Any] | None = None
-    started = time.time()
 
     with urllib.request.urlopen(req, timeout=args.timeout) as resp:
-        with raw_path.open("w", encoding="utf-8") as raw_fh:
+        raw_fh = None
+        try:
+            if not args.pretty_only:
+                raw_fh = raw_path.open("w", encoding="utf-8")
             for raw_line in resp:
                 line = raw_line.decode("utf-8").strip()
                 if not line:
                     continue
 
-                raw_fh.write(line + "\n")
-                raw_fh.flush()
+                if raw_fh is not None:
+                    raw_fh.write(line + "\n")
+                    raw_fh.flush()
 
                 event_count += 1
                 event = json.loads(line)
@@ -129,14 +164,122 @@ def main() -> int:
 
                 if event.get("done"):
                     break
+        finally:
+            if raw_fh is not None:
+                raw_fh.close()
+
+    return "".join(thinking_parts), "".join(content_parts), event_count, last_event
+
+
+def _capture_openai(
+    args: argparse.Namespace,
+    payload: dict[str, Any],
+) -> tuple[str, str, int, dict[str, Any]]:
+    headers = {"Content-Type": "application/json"}
+    if args.api_key:
+        headers["Authorization"] = f"Bearer {args.api_key}"
+
+    req = urllib.request.Request(
+        _openai_chat_url(args.base_url),
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=args.timeout) as resp:
+            response = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"OpenAI-compatible request failed with HTTP {exc.code}: {detail}"
+        ) from exc
+
+    message = response["choices"][0]["message"]
+    thinking_text = message.get("reasoning") or message.get("reasoning_content") or ""
+    content_text = message.get("content") or ""
+    return thinking_text, content_text, 1, response
+
+
+def _write_error_pretty(
+    args: argparse.Namespace,
+    model: str,
+    input_path: Path,
+    prefix: Path,
+    chunk: dict[str, Any],
+    payload: dict[str, Any],
+    exc: Exception,
+) -> None:
+    pretty_path = Path(f"{prefix}_pretty.txt")
+    payload_text = json.dumps(payload, ensure_ascii=False, indent=2)
+    pretty_path.write_text(
+        "BACKEND: {backend}\n"
+        "MODEL: {model}\n"
+        "CHUNK LINE: {chunk_line}\n"
+        "CHUNK ID: {chunk_id}\n"
+        "BREADCRUMB: {breadcrumb}\n"
+        "ERROR: {error_type}: {error}\n\n"
+        "===== FULL INPUT PAYLOAD =====\n"
+        "{payload_text}\n\n"
+        "===== THINKING =====\n\n"
+        "===== FINAL CONTENT =====\n".format(
+            backend=args.backend,
+            model=model,
+            chunk_line=args.chunk_line,
+            chunk_id=chunk.get("chunk_id"),
+            breadcrumb=chunk.get("breadcrumb"),
+            error_type=type(exc).__name__,
+            error=exc,
+            payload_text=payload_text,
+        ),
+        encoding="utf-8",
+    )
+    Path(f"{prefix}_error.txt").write_text(
+        f"{type(exc).__name__}: {exc}\n", encoding="utf-8"
+    )
+    print(f"Saved error pretty text: {pretty_path}", file=sys.stderr)
+
+
+def main() -> int:
+    args = _parse_args()
+    model = _resolve_model(args.backend, args.model)
+    input_path = Path(args.input)
+    prefix = Path(args.output_prefix)
+    prefix.parent.mkdir(parents=True, exist_ok=True)
+
+    chunk = _read_chunk(input_path, args.chunk_line, args.chunk_id)
+    text = chunk.get("text", "").strip()
+    user_content = _build_user_content(chunk)
+
+    if args.backend == "openai":
+        payload = _build_openai_payload(args, model, user_content)
+    else:
+        payload = _build_ollama_payload(args, model, user_content)
+
+    raw_path = Path(f"{prefix}_raw_events.jsonl")
+    full_path = Path(f"{prefix}_full.json")
+    pretty_path = Path(f"{prefix}_pretty.txt")
+    started = time.time()
+
+    try:
+        if args.backend == "openai":
+            thinking_text, content_text, event_count, last_event = _capture_openai(
+                args, payload
+            )
+        else:
+            thinking_text, content_text, event_count, last_event = _capture_ollama(
+                args, payload, raw_path
+            )
+    except Exception as exc:
+        _write_error_pretty(args, model, input_path, prefix, chunk, payload, exc)
+        print(f"ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
 
     elapsed = time.time() - started
-    thinking_text = "".join(thinking_parts)
-    content_text = "".join(content_parts)
     payload_text = json.dumps(payload, ensure_ascii=False, indent=2)
 
     full = {
-        "model": args.model,
+        "backend": args.backend,
+        "model": model,
         "input": str(input_path),
         "chunk_line": args.chunk_line,
         "chunk_id": chunk.get("chunk_id"),
@@ -151,8 +294,10 @@ def main() -> int:
         "content": content_text,
         "done_event": last_event,
     }
-    full_path.write_text(json.dumps(full, ensure_ascii=False, indent=2), encoding="utf-8")
+    if not args.pretty_only:
+        full_path.write_text(json.dumps(full, ensure_ascii=False, indent=2), encoding="utf-8")
     pretty_path.write_text(
+        "BACKEND: {backend}\n"
         "MODEL: {model}\n"
         "CHUNK LINE: {chunk_line}\n"
         "CHUNK ID: {chunk_id}\n"
@@ -167,7 +312,8 @@ def main() -> int:
         "{thinking}\n\n"
         "===== FINAL CONTENT =====\n"
         "{content}\n".format(
-            model=args.model,
+            backend=args.backend,
+            model=model,
             chunk_line=args.chunk_line,
             chunk_id=chunk.get("chunk_id"),
             breadcrumb=chunk.get("breadcrumb"),
@@ -182,8 +328,9 @@ def main() -> int:
         encoding="utf-8",
     )
 
-    print(f"Saved raw events: {raw_path}")
-    print(f"Saved full JSON: {full_path}")
+    if not args.pretty_only:
+        print(f"Saved raw events: {raw_path}")
+        print(f"Saved full JSON: {full_path}")
     print(f"Saved pretty text: {pretty_path}")
     print(f"Elapsed: {elapsed:.2f}s")
     print(f"Events: {event_count}")
