@@ -136,11 +136,36 @@ This script should generate:
 - `synthesis` questions
 - `adversarial` reformulations
 
-Implementation decision to lock before full runs:
+Adversarial questions are additive. Keep the original `per_chunk` question and
+write each robustness-oriented reformulation as a separate `adversarial` query
+record with the same seed chunk. `queries.target_total` is a planning target for
+source sampling, not a hard cap on the final query count.
 
-- Decide whether adversarial questions replace selected originals or are added
-  as extra records. Prefer replacement or additive-with-cap so query count stays
-  close to `queries.target_total`.
+Research on RAG and medical retrieval shows several query situations need
+explicit retrieval evaluation coverage:
+
+- `abbreviation`: common clinical shorthand such as PPH, MgSO4, BP, IV, IM,
+  PMTCT, ANC, CS, FHR, or LMP. Only generate these when the original question
+  contains natural abbreviation candidates; skip unchanged or unnatural
+  reformulations.
+- `typo`: realistic spelling or keyboard mistakes that preserve the clinical
+  intent.
+- `lay_synonym`: colloquial patient-facing wording instead of professional
+  medical terminology.
+- `redundant_context`: extra bedside narrative around the actual information
+  need.
+- `ambiguous`: underspecified wording that still points to the same likely
+  clinical topic.
+- `multi_condition`: questions with multiple constraints, such as condition
+  plus risk factor, contraindication, or patient state.
+- `negation`: "avoid", "do not", contraindication, or absence-of-symptom
+  wording.
+- `rare_exact`: drug names, doses, measurements, procedures, or rare salient
+  terms where exact matching matters.
+
+Do not include corpus poisoning or prompt injection in Stage 4 query generation;
+those belong in a later security/robustness audit because this benchmark uses a
+fixed curated guideline corpus.
 
 Checkpoint:
 
