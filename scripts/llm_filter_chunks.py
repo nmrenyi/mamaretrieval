@@ -52,11 +52,6 @@ The reason must explain both why the generated question is or is not answerable 
 Evaluate answerable_by_chunk and clinically_useful independently:
 - answerable_by_chunk can be true while clinically_useful is false if the chunk answers a question, but that question is educational, administrative, bibliographic, or otherwise not useful for direct patient care.
 - answerable_by_chunk can be false while clinically_useful is true if the generated question is clinically useful, but the chunk lacks enough information to answer it.
-Valid decision patterns include:
-- {"query": "<question>", "reason": "Chunk answers it and it guides care.", "answerable_by_chunk": true, "clinically_useful": true}
-- {"query": "<question>", "reason": "Chunk answers it, but it is not direct care.", "answerable_by_chunk": true, "clinically_useful": false}
-- {"query": "<question>", "reason": "Clinically useful, but chunk lacks the answer.", "answerable_by_chunk": false, "clinically_useful": true}
-- {"query": null, "reason": "No meaningful clinical or answerable question.", "answerable_by_chunk": false, "clinically_useful": false}
 
 A question is clinically useful if it asks about:
 - Diagnosis, assessment, or recognition of a condition
@@ -73,10 +68,10 @@ A question is not clinically useful if the chunk is primarily:
 - Bibliography or reference lists
 - Very sparse incomplete fragments
 
-Respond with JSON only — no prose, no markdown fences:
-{"query": "<clinical question>", "reason": "<≤30 words>", "answerable_by_chunk": true, "clinically_useful": true}
-
-If no meaningful clinical query is possible, respond:
+Respond with JSON only — no prose, no markdown fences. Use whichever pattern applies and write your own reason in ≤30 words:
+{"query": "<question ≤20 words>", "reason": "<≤30 words>", "answerable_by_chunk": true, "clinically_useful": true}
+{"query": "<question ≤20 words>", "reason": "<≤30 words>", "answerable_by_chunk": true, "clinically_useful": false}
+{"query": "<question ≤20 words>", "reason": "<≤30 words>", "answerable_by_chunk": false, "clinically_useful": true}
 {"query": null, "reason": "<≤30 words>", "answerable_by_chunk": false, "clinically_useful": false}"""
 
 
