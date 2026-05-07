@@ -6,6 +6,7 @@ import unittest
 from mamaretrieval.corpus import CorpusChunk
 from mamaretrieval.sampling import (
     ROOT_SECTION,
+    SampledChunk,
     SourceTarget,
     boilerplate_reason,
     build_source_targets,
@@ -44,6 +45,17 @@ class SamplingTests(unittest.TestCase):
 
     def test_top_level_section_uses_root_for_missing_breadcrumb(self) -> None:
         self.assertEqual(top_level_section(""), ROOT_SECTION)
+
+    def test_sampled_chunk_record_includes_section(self) -> None:
+        sampled = SampledChunk(
+            chunk("a" * 16, breadcrumb="Postpartum Haemorrhage > Treatment"),
+            tier="very_high",
+            section="Postpartum Haemorrhage",
+        )
+
+        record = sampled.to_record()
+
+        self.assertEqual(record["section"], "Postpartum Haemorrhage")
 
     def test_boilerplate_filters_short_text(self) -> None:
         reason = boilerplate_reason(chunk("a" * 16, text="Too short."))
@@ -162,6 +174,60 @@ class SamplingTests(unittest.TestCase):
         )
 
         self.assertEqual(reason, "cataloguing")
+
+    def test_boilerplate_filters_web_resources(self) -> None:
+        reason = boilerplate_reason(
+            chunk(
+                "4" * 16,
+                text=(
+                    "#### WEB RESOURCES FOR CLINICIANS\n\n"
+                    "| Resource | URL |\n"
+                    "|---|---|\n"
+                    "| Fertility chart | www.example.org |\n"
+                    "| Patient handout | www.example.net |"
+                ),
+            )
+        )
+
+        self.assertEqual(reason, "heading_web_resources_for_clinicians")
+
+    def test_boilerplate_filters_empty_form_tables(self) -> None:
+        reason = boilerplate_reason(
+            chunk(
+                "5" * 16,
+                text=(
+                    "### Evaluating care: Vaginal bleed at term\n\n"
+                    "| Recommendations: |\n"
+                    "|------------------|\n"
+                    "|                  |\n"
+                    "|                  |\n"
+                    "|                  |\n"
+                    "|                  |\n"
+                    "|                  |\n"
+                    "The instructions and available resources are provided for "
+                    "the mock clinical skill station, along with timing."
+                ),
+            )
+        )
+
+        self.assertEqual(reason, "empty_form_table")
+
+    def test_boilerplate_keeps_contentful_tables(self) -> None:
+        reason = boilerplate_reason(
+            chunk(
+                "6" * 16,
+                text=(
+                    "### Management options\n\n"
+                    "| Finding | Action |\n"
+                    "|---|---|\n"
+                    "| Fever with uterine tenderness | Start antibiotics |\n"
+                    "| Heavy bleeding after birth | Assess for postpartum haemorrhage |\n"
+                    "These findings guide urgent bedside assessment and treatment."
+                ),
+            )
+        )
+
+        self.assertIsNone(reason)
 
     def test_build_source_targets_uses_ceiling_query_budget(self) -> None:
         targets = build_source_targets(
