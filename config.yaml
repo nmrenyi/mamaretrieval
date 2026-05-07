@@ -4,7 +4,7 @@ corpus:
 
 queries:
   target_total: 3000
-  questions_per_chunk: 2
+  questions_per_chunk: 1
   synthesis_questions: true
   adversarial_fraction: 0.15
   random_seed: 42
@@ -60,4 +60,3 @@ audit:
   n_queries: 30
   top_k_exhaustive: 20
   n_retrievers_exhaustive: 6
-

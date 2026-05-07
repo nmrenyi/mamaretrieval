@@ -79,7 +79,7 @@ corpus:
 
 queries:
   target_total: 3000
-  questions_per_chunk: 2        # default; range 2-3
+  questions_per_chunk: 1        # one per-chunk question per sampled chunk
   synthesis_questions: true     # generate cross-chunk synthesis questions
   adversarial_fraction: 0.15    # fraction of questions with robustness reformulations
 
@@ -351,7 +351,7 @@ Parsing logic:
 **Query types and prompts:**
 
 #### Per-chunk questions (standard)
-For each sampled chunk, generate 2 questions (configurable via `questions_per_chunk`) answerable by that chunk.
+For each sampled chunk, generate 1 question (configurable via `questions_per_chunk`) answerable by that chunk.
 
 System prompt:
 ```
