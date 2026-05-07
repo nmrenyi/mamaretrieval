@@ -117,22 +117,48 @@ Checkpoint:
 - Re-running with the same config and corpus produces identical output.
 - Output JSONL validates against the expected schema.
 
-## Stage 4: Query Generation
+## Stage 4: LLM Chunk Filtering and Query Assembly
 
-Implement:
+First implement and run the LLM chunk filter:
 
 ```bash
-python scripts/generate_queries.py
+python scripts/llm_filter_chunks.py
 ```
 
 Start with small, resumable runs:
 
 ```bash
-python scripts/generate_queries.py --limit 5
-python scripts/generate_queries.py --resume
+python scripts/llm_filter_chunks.py --limit 5
+python scripts/llm_filter_chunks.py --resume
 ```
 
-This script should generate:
+This script applies the current system prompt to each sampled chunk. For each
+chunk, the model should:
+
+- carefully understand the chunk's clinical topic, guidance, purpose, and
+  completeness
+- generate exactly one clinical seed query, with the prompt-level limit of
+  `≤20` words
+- write a reason explaining answerability and clinical usefulness, with the
+  prompt-level limit of `≤30` words
+- independently judge `answerable_by_chunk` and `clinically_useful`
+
+Keep a chunk only when both `answerable_by_chunk` and `clinically_useful` are
+true. Write all judgments to `data/llm_filter_results.jsonl`, and write kept
+chunks to `data/llm_filtered_chunks.jsonl` with `seed_query`,
+`llm_answerable_by_chunk`, `llm_clinically_useful`, `llm_filter_reason`, the
+result schema version, and the prompt hash. Resume logic must only reuse
+judgments and kept output records that match the current schema and prompt hash.
+
+Then implement query assembly:
+
+```bash
+python scripts/generate_queries.py
+```
+
+`generate_queries.py` should consume `data/llm_filtered_chunks.jsonl`, not raw
+`data/sampled_chunks.jsonl`. It should treat each `seed_query` as the
+`per_chunk` query for that chunk, then add:
 
 - `per_chunk` questions
 - `synthesis` questions
@@ -171,6 +197,10 @@ fixed curated guideline corpus.
 
 Checkpoint:
 
+- `data/llm_filter_results.jsonl` is valid JSONL using the current
+  `query` / `reason` / `answerable_by_chunk` / `clinically_useful` schema.
+- `data/llm_filtered_chunks.jsonl` contains only chunks that passed both LLM
+  checks.
 - `data/queries.jsonl` is valid JSONL.
 - `query_id` values are stable and sequential.
 - `seed_chunk_ids` are preserved for synthesis queries.

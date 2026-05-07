@@ -33,12 +33,15 @@ mamaretrieval/
 ├── config.yaml                     # source tiers, query counts, model/path settings
 ├── scripts/
 │   ├── sample_chunks.py            # Phase 1a: sample chunks from corpus by tier
-│   ├── generate_queries.py         # Phase 1b: LLM query generation from sampled chunks
+│   ├── llm_filter_chunks.py        # Phase 1b: LLM chunk filter and seed queries
+│   ├── generate_queries.py         # Phase 1c: assemble final query records
 │   ├── pool_candidates.py          # Phase 2a: run retrievers, union top-k per query
 │   ├── judge_relevance.py          # Phase 2b: LLM judge candidates → final labels
 │   └── audit.py                    # Phase 3: completeness audit
 ├── data/
 │   ├── sampled_chunks.jsonl        # output of sample_chunks.py
+│   ├── llm_filter_results.jsonl    # all LLM chunk filter judgments
+│   ├── llm_filtered_chunks.jsonl   # chunks kept after LLM filtering
 │   ├── queries.jsonl               # output of generate_queries.py
 │   ├── candidates.jsonl            # output of pool_candidates.py
 │   ├── labels.jsonl                # output of judge_relevance.py
@@ -161,8 +164,48 @@ One JSON object per line. Output of `sample_chunks.py`.
 }
 ```
 
+### `data/llm_filter_results.jsonl`
+One JSON object per line. Output of `llm_filter_chunks.py`, including both kept
+and rejected sampled chunks.
+
+```json
+{
+  "chunk_id": "dcaeb591065c7c22",
+  "llm_filter_schema_version": "answerable-clinically-useful-v1",
+  "llm_filter_prompt_hash": "16a4fb380cf1355b",
+  "query": "What dose of oxytocin is used for active management of third stage?",
+  "reason": "Chunk gives the oxytocin dose and the question guides bedside care.",
+  "answerable_by_chunk": true,
+  "clinically_useful": true
+}
+```
+
+### `data/llm_filtered_chunks.jsonl`
+One JSON object per line. Output of `llm_filter_chunks.py`. This contains only
+sampled chunks whose generated seed query is both answerable by the chunk and
+clinically useful.
+
+```json
+{
+  "chunk_id": "dcaeb591065c7c22",
+  "source": "msf-essential-obstetric-and-newborn-care",
+  "tier": "very_high",
+  "section": "Postpartum Haemorrhage",
+  "page": 14,
+  "breadcrumb": "Postpartum Haemorrhage > Active Management of Third Stage",
+  "text": "...",
+  "llm_filter_schema_version": "answerable-clinically-useful-v1",
+  "llm_filter_prompt_hash": "16a4fb380cf1355b",
+  "seed_query": "What dose of oxytocin is used for active management of third stage?",
+  "llm_answerable_by_chunk": true,
+  "llm_clinically_useful": true,
+  "llm_filter_reason": "Chunk gives the oxytocin dose and the question guides bedside care."
+}
+```
+
 ### `data/queries.jsonl`
-One JSON object per line. Output of `generate_queries.py`.
+One JSON object per line. Output of `generate_queries.py`, built from
+`data/llm_filtered_chunks.jsonl`.
 
 ```json
 {
@@ -340,49 +383,67 @@ Parsing logic:
 
 ---
 
-### Phase 1b — `scripts/generate_queries.py`
+### Phase 1b — `scripts/llm_filter_chunks.py`
 
-**Purpose:** Call an LLM to generate questions for each sampled chunk. Apply three query types: per-chunk, synthesis, and adversarial.
+**Purpose:** Call a local LLM for each sampled chunk to generate one seed query
+and reject chunks whose seed query is not both answerable by that chunk and
+clinically useful.
 
-**Input:** `data/sampled_chunks.jsonl`, `config.yaml`
+**Input:** `data/sampled_chunks.jsonl`
+
+**Outputs:** `data/llm_filter_results.jsonl`, `data/llm_filtered_chunks.jsonl`
+
+**Prompt contract:**
+
+The system prompt asks the model to do three things in order:
+
+1. Carefully understand the chunk's clinical topic, guidance, purpose, and
+   completeness.
+2. Generate exactly one clinical question a practicing midwife or nurse would
+   type into a clinical reference system. The prompt limits the question to
+   `≤20` words.
+3. Judge `answerable_by_chunk` and `clinically_useful` independently, with a
+   reason explaining both judgments. The prompt limits the reason to `≤30`
+   words.
+
+The model must return exactly one JSON object using one of these patterns:
+
+```json
+{"query": "<question ≤20 words>", "reason": "<≤30 words>", "answerable_by_chunk": true, "clinically_useful": true}
+{"query": "<question ≤20 words>", "reason": "<≤30 words>", "answerable_by_chunk": true, "clinically_useful": false}
+{"query": "<question ≤20 words>", "reason": "<≤30 words>", "answerable_by_chunk": false, "clinically_useful": true}
+{"query": null, "reason": "<≤30 words>", "answerable_by_chunk": false, "clinically_useful": false}
+```
+
+Keep only chunks where both `answerable_by_chunk` and `clinically_useful` are
+true. For kept chunks, copy the sampled chunk record and add `seed_query`,
+`llm_answerable_by_chunk`, `llm_clinically_useful`, `llm_filter_reason`,
+`llm_filter_schema_version`, and `llm_filter_prompt_hash`.
+
+`--resume` must only reuse previous judgments with the current
+`llm_filter_schema_version` and `llm_filter_prompt_hash`; older `suitable`
+records, output records, or records from a previous prompt are stale and must
+be ignored.
+
+### Phase 1c — `scripts/generate_queries.py`
+
+**Purpose:** Assemble final benchmark queries from LLM-filtered chunks, then add
+synthesis and adversarial query records.
+
+**Input:** `data/llm_filtered_chunks.jsonl`, `config.yaml`
 
 **Output:** `data/queries.jsonl`
 
-**Query types and prompts:**
+**Query types:**
 
 #### Per-chunk questions (standard)
-For each sampled chunk, generate 1 question (configurable via `questions_per_chunk`) answerable by that chunk.
-
-System prompt:
-```
-You are generating realistic clinical questions for a retrieval benchmark.
-The questions will be used to test whether a RAG system for nurses and midwives
-in Zanzibar, Tanzania can retrieve the right guideline passages.
-```
-
-User prompt:
-```
-Given the following passage from a clinical guideline, generate {n} questions
-that are directly and completely answered by this passage.
-
-Requirements:
-- Write as a nurse or midwife in Zanzibar would ask at the bedside:
-  action-oriented, first-person, colloquial. Example: "What do I give for..."
-  not "What is the recommended treatment for..."
-- Each question must be answerable solely from this passage.
-- Vary question style: some procedural ("how do I..."), some dosing
-  ("what dose of..."), some recognition ("what are the signs of...").
-- Do not reference the source document by name.
-
-Passage (source: {source}):
-{breadcrumb}
-{text}
-
-Return a JSON array of {n} question strings. No other text.
-```
+For each filtered chunk, use `seed_query` as the `per_chunk` question. Preserve
+`chunk_id` as `seed_chunk_id`, plus the source and tier metadata.
 
 #### Synthesis questions
-After generating per-chunk questions, group sampled chunks by clinical topic (use the top-level breadcrumb heading). For each topic group with 3+ chunks, generate 1 synthesis question that cannot be answered by any single chunk alone.
+After creating per-chunk records, group filtered chunks by clinical topic (use
+the top-level breadcrumb heading). For each topic group with 3+ chunks, generate
+1 synthesis question that cannot be answered by any single chunk alone.
 
 User prompt:
 ```
@@ -450,7 +511,10 @@ Research basis:
 - Medical search work highlights layperson/professional vocabulary gaps: https://link.springer.com/article/10.1007/s10791-015-9258-y
 
 **Implementation notes:**
-- Use `openai` client with model from `config.yaml` (`gpt-4o-mini` for generation).
+- Use `llm_filter_chunks.py` with local Ollama/Qwen for seed query generation
+  and filtering.
+- Use the generation model from `config.yaml` for synthesis and adversarial
+  query assembly if those steps require LLM calls.
 - Batch requests where possible; use `tqdm` for progress.
 - Write to `data/queries.jsonl` incrementally (flush after each source) so partial runs are recoverable.
 - Assign `query_id` as `q_{index:05d}` (zero-padded, sequential across all queries).
@@ -609,7 +673,8 @@ The `releases/mamaretrieval-v1/` directory is the artifact consumed by the evalu
 
 ```bash
 python scripts/sample_chunks.py      # → data/sampled_chunks.jsonl
-python scripts/generate_queries.py   # → data/queries.jsonl  (~$5-15 GPT-4o-mini)
+python scripts/llm_filter_chunks.py  # → data/llm_filtered_chunks.jsonl
+python scripts/generate_queries.py   # → data/queries.jsonl
 python scripts/pool_candidates.py    # → data/candidates.jsonl  (CPU-heavy, ~30 min)
 python scripts/judge_relevance.py    # → data/labels.jsonl  (~$20-40 GPT-4o)
 python scripts/audit.py              # → data/audit/  (requires manual review step)
