@@ -42,41 +42,39 @@ DEFAULT_RESULTS = Path("data/llm_filter_results.jsonl")
 SYSTEM_PROMPT = """You evaluate text chunks from midwifery and obstetrics clinical guidelines.
 
 Your task has three steps:
+
 1. Carefully read the chunk and identify:
    - The clinical topic or patient situation it addresses
    - The specific guidance, recommendations, dosages, or procedures it contains
    - Whether its primary purpose is to guide clinical care or to serve an educational, administrative, or structural function
    - How complete the clinical information is — does it provide enough to guide action, or is it partial or introductory?
-   This understanding should directly inform the question you generate and your answerability judgment.
-2. Generate ONE clinical question that a practicing midwife or nurse would type into a clinical reference system — a direct question, not a conversational sentence.
-   The question must be ≤20 words and specific enough that only one or two guideline sections would answer it — not so broad that any clinical text would be relevant.
-3. Given the chunk text and your generated question, evaluate both:
-   - answerable_by_chunk: whether the chunk contains enough information to directly answer the question. Treat as answerable_by_chunk=true if the chunk contains the key fact, step, indication, warning, or recommendation needed to answer the question — even if the answer is incomplete.
-   - clinically_useful: whether the question is useful for direct clinical care.
+   This understanding informs your clinical relevance judgment and answerability evaluation.
 
-The reason must explain both why the generated question is or is not answerable from the chunk and why it is or is not clinically useful, in ≤30 words.
-Evaluate answerable_by_chunk and clinically_useful independently:
-- answerable_by_chunk can be true while clinically_useful is false if the chunk answers a question, but that question is non-clinical, administrative, bibliographic, or otherwise not useful for direct patient care.
-- answerable_by_chunk can be false while clinically_useful is true if the generated question is clinically useful, but the chunk lacks enough information to answer it.
+2. Judge clinical relevance (clinically_useful).
+   A chunk IS clinically relevant if it primarily contains:
+   - Diagnosis, assessment, or recognition of a condition
+   - Clinical management steps, procedures, or protocols
+   - Drug names, dosages, routes, or contraindications
+   - Risk factors, complications, prevention, or emergency responses
+   - Counseling or patient education that directly supports health decisions
+   - Evidence-based clinical recommendations for patient care
+   Do not reject a chunk merely because it is written in an explanatory style — if it explains clinically relevant facts that support counseling, assessment, prevention, risk recognition, diagnosis, management, or referral, it is clinically relevant.
 
-A question is clinically useful if it asks about:
-- Diagnosis, assessment, or recognition of a condition
-- Clinical management steps, procedures, or protocols
-- Drug names, dosages, routes, or contraindications
-- Risk factors, complications, prevention, or emergency responses
-- Counseling or patient education that directly supports health decisions
-- Evidence-based clinical recommendations for patient care
+   A chunk is NOT clinically relevant if it is primarily:
+   - Educator instructions, classroom activities, group discussion prompts, role-play directions, or facilitator notes
+   - Student reflection prompts, scenario discussion questions, or assessment / competency questions
+   - Module / chapter structure overviews or table-of-contents listings
+   - Bibliography, citation, copyright, cataloging, acknowledgements, or contact information
+   - Professional conduct or organizational advice that does not guide patient counseling, assessment, prevention, or care
+   - Very sparse incomplete fragments
+   If the chunk is not clinically relevant, stop here and return query=null with clinically_useful=false and answerable_by_chunk=false.
 
-Do not reject a chunk merely because it is written in an educational or explanatory style. If it explains clinically relevant facts that can support counseling, assessment, prevention, risk recognition, diagnosis, management, or referral, the generated question can be clinically_useful=true.
-A question is not clinically useful if the chunk is primarily:
-- Educator instructions, classroom activities, group discussion prompts, role-play directions, or facilitator notes
-- Student reflection prompts, scenario discussion questions, or assessment / competency questions
-- Module / chapter structure overviews or table-of-contents listings
-- Bibliography, citation, copyright, cataloging, acknowledgements, or contact information
-- Professional conduct or organizational advice that does not guide patient counseling, assessment, prevention, or care
-- Very sparse incomplete fragments
+3. Only if clinically relevant: generate ONE clinical question that a practicing midwife or nurse would type into a clinical reference system — a direct question, not a conversational sentence.
+   The question must be ≤20 words and specific enough that only one or two guideline sections would answer it.
+   Then evaluate answerable_by_chunk: treat as true if the chunk contains the key fact, step, indication, warning, or recommendation needed to answer the question — even if the answer is incomplete.
+   If no specific answerable question can be derived from the chunk, use query=null rather than inventing an unrelated clinical question.
 
-If no clinically relevant question can be answered from the chunk, use query=null rather than inventing an unrelated clinical question.
+The reason must explain your clinical relevance judgment and, if applicable, your answerability assessment, in ≤30 words.
 
 Return exactly one JSON object — no prose, no markdown fences. The four patterns below are options, not all to be returned. Choose whichever applies and write your own reason in ≤30 words:
 {"query": "<question ≤20 words>", "reason": "<≤30 words>", "answerable_by_chunk": true, "clinically_useful": true}
