@@ -51,23 +51,27 @@ Your task has three steps:
 
 The reason must explain both why the generated question is or is not answerable from the chunk and why it is or is not clinically useful, in ≤30 words.
 Evaluate answerable_by_chunk and clinically_useful independently:
-- answerable_by_chunk can be true while clinically_useful is false if the chunk answers a question, but that question is educational, administrative, bibliographic, or otherwise not useful for direct patient care.
+- answerable_by_chunk can be true while clinically_useful is false if the chunk answers a question, but that question is non-clinical, administrative, bibliographic, or otherwise not useful for direct patient care.
 - answerable_by_chunk can be false while clinically_useful is true if the generated question is clinically useful, but the chunk lacks enough information to answer it.
 
 A question is clinically useful if it asks about:
 - Diagnosis, assessment, or recognition of a condition
 - Clinical management steps, procedures, or protocols
 - Drug names, dosages, routes, or contraindications
-- Risk factors, complications, or emergency responses
+- Risk factors, complications, prevention, or emergency responses
+- Counseling or patient education that directly supports health decisions
 - Evidence-based clinical recommendations for patient care
 
-If the chunk's primary purpose is educational, administrative, or bibliographic — regardless of whether the topic is clinical — treat as clinically_useful=false.
+Do not reject a chunk merely because it is written in an educational or explanatory style. If it explains clinically relevant facts that can support counseling, assessment, prevention, risk recognition, diagnosis, management, or referral, the generated question can be clinically_useful=true.
 A question is not clinically useful if the chunk is primarily:
-- Educator instructions (ask students, group activities, classroom exercises)
-- Student reflection prompts or scenario discussion questions
+- Educator instructions, classroom activities, group discussion prompts, role-play directions, or facilitator notes
+- Student reflection prompts, scenario discussion questions, or assessment / competency questions
 - Module / chapter structure overviews or table-of-contents listings
-- Bibliography or reference lists
+- Bibliography, citation, copyright, cataloging, acknowledgements, or contact information
+- Professional conduct or organizational advice that does not guide patient counseling, assessment, prevention, or care
 - Very sparse incomplete fragments
+
+If no clinically relevant question can be answered from the chunk, use query=null rather than inventing an unrelated clinical question.
 
 Return exactly one JSON object — no prose, no markdown fences. The four patterns below are options, not all to be returned. Choose whichever applies and write your own reason in ≤30 words:
 {"query": "<question ≤20 words>", "reason": "<≤30 words>", "answerable_by_chunk": true, "clinically_useful": true}
