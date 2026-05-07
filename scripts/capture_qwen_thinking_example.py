@@ -69,12 +69,13 @@ def main() -> int:
 
     chunk = _read_chunk(input_path, args.chunk_line, args.chunk_id)
     text = chunk.get("text", "").strip()
+    user_content = _build_user_content(chunk)
 
     payload: dict[str, Any] = {
         "model": args.model,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": _build_user_content(chunk)},
+            {"role": "user", "content": user_content},
         ],
         "stream": True,
         "think": not args.no_think,
@@ -132,6 +133,7 @@ def main() -> int:
     elapsed = time.time() - started
     thinking_text = "".join(thinking_parts)
     content_text = "".join(content_parts)
+    payload_text = json.dumps(payload, ensure_ascii=False, indent=2)
 
     full = {
         "model": args.model,
@@ -140,6 +142,8 @@ def main() -> int:
         "chunk_id": chunk.get("chunk_id"),
         "breadcrumb": chunk.get("breadcrumb"),
         "chunk_text": text,
+        "system_prompt": SYSTEM_PROMPT,
+        "user_content": user_content,
         "payload": payload,
         "elapsed_seconds": elapsed,
         "num_stream_events": event_count,
@@ -157,8 +161,8 @@ def main() -> int:
         "STREAM EVENTS: {events}\n"
         "THINKING CHARS: {thinking_chars}\n"
         "CONTENT CHARS: {content_chars}\n\n"
-        "===== CHUNK TEXT =====\n"
-        "{chunk_text}\n\n"
+        "===== FULL INPUT PAYLOAD =====\n"
+        "{payload_text}\n\n"
         "===== THINKING =====\n"
         "{thinking}\n\n"
         "===== FINAL CONTENT =====\n"
@@ -171,7 +175,7 @@ def main() -> int:
             events=event_count,
             thinking_chars=len(thinking_text),
             content_chars=len(content_text),
-            chunk_text=text,
+            payload_text=payload_text,
             thinking=thinking_text,
             content=content_text,
         ),
