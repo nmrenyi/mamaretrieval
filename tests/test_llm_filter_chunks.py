@@ -20,9 +20,7 @@ class LlmFilterResumeTests(unittest.TestCase):
             "llm_backend": "ollama",
             "llm_model": "qwen3.5:9b",
             "query": "What dose of oxytocin is used?",
-            "reason": "Chunk answers it and it guides care.",
-            "answerable_by_chunk": True,
-            "clinically_useful": True,
+            "reason": "Chunk gives oxytocin dose and route for postpartum haemorrhage prevention.",
         }
         old_suitable_schema = {
             "chunk_id": "b" * 16,
@@ -38,8 +36,6 @@ class LlmFilterResumeTests(unittest.TestCase):
             "llm_model": "qwen3.5:9b",
             "query": "What dose of oxytocin is used?",
             "reason": "old prompt",
-            "answerable_by_chunk": True,
-            "clinically_useful": True,
         }
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -68,9 +64,7 @@ class LlmFilterResumeTests(unittest.TestCase):
             "llm_backend": "openai",
             "llm_model": "Qwen/Qwen3.6-27B-FP8",
             "query": "What dose of oxytocin is used?",
-            "reason": "Chunk answers it and it guides care.",
-            "answerable_by_chunk": True,
-            "clinically_useful": True,
+            "reason": "Chunk gives oxytocin dose and route for postpartum haemorrhage prevention.",
         }
         stale_model = dict(current, chunk_id="b" * 16, llm_model="qwen3.5:9b")
         stale_backend = dict(current, chunk_id="c" * 16, llm_backend="ollama")
@@ -101,8 +95,7 @@ class LlmFilterResumeTests(unittest.TestCase):
             "llm_backend": "openai",
             "llm_model": "Qwen/Qwen3.6-27B-FP8",
             "seed_query": "What dose of oxytocin is used?",
-            "llm_answerable_by_chunk": True,
-            "llm_clinically_useful": True,
+            "llm_filter_reason": "Chunk gives oxytocin dose and route for postpartum haemorrhage.",
         }
         stale_output = dict(current_output, llm_filter_prompt_hash="old-prompt")
         stale_model = dict(current_output, llm_model="qwen3.5:9b")
@@ -143,9 +136,7 @@ class LlmFilterResumeTests(unittest.TestCase):
                         "content": json.dumps(
                             {
                                 "query": "What oxytocin dose prevents postpartum haemorrhage after birth?",
-                                "reason": "Chunk gives dose, route, and indication; useful for care.",
-                                "answerable_by_chunk": True,
-                                "clinically_useful": True,
+                                "reason": "Chunk gives dose, route, and indication; clinically relevant.",
                             }
                         ),
                     }
@@ -181,8 +172,7 @@ class LlmFilterResumeTests(unittest.TestCase):
             result["query"],
             "What oxytocin dose prevents postpartum haemorrhage after birth?",
         )
-        self.assertTrue(result["answerable_by_chunk"])
-        self.assertTrue(result["clinically_useful"])
+        self.assertIn("dose", result["reason"])
         self.assertEqual(
             llm_filter_chunks._openai_chat_url(
                 "http://127.0.0.1:8000/v1/chat/completions"

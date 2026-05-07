@@ -50,7 +50,7 @@ Your task has three steps:
    - How complete the clinical information is — does it provide enough to guide action, or is it partial or introductory?
    This understanding informs your clinical relevance judgment and answerability evaluation.
 
-2. Judge clinical relevance (clinically_useful).
+2. Judge clinical relevance.
    A chunk IS clinically relevant if it primarily contains:
    - Diagnosis, assessment, or recognition of a condition
    - Clinical management steps, procedures, or protocols
@@ -67,22 +67,19 @@ Your task has three steps:
    - Bibliography, citation, copyright, cataloging, acknowledgements, or contact information
    - Professional conduct or organizational advice that does not guide patient counseling, assessment, prevention, or care
    - Very sparse incomplete fragments
-   If the chunk is not clinically relevant, stop here and return query=null with clinically_useful=false and answerable_by_chunk=false.
+   If the chunk is not clinically relevant, stop here and return query=null.
 
 3. Only if clinically relevant: generate ONE clinical question that a practicing midwife or nurse would type into a clinical reference system — a direct question, not a conversational sentence.
    The question must be ≤20 words and specific enough that only one or two guideline sections would answer it.
-   Then evaluate answerable_by_chunk: treat as true if the chunk contains the key fact, step, indication, warning, or recommendation needed to answer the question — even if the answer is incomplete.
-   If no specific answerable question can be derived from the chunk, use query=null rather than inventing an unrelated clinical question.
+   The question must be grounded in the chunk's actual content — do not invent a question the chunk cannot answer.
 
-The reason must explain your clinical relevance judgment and, if applicable, your answerability assessment, in ≤30 words.
+The reason must explain your clinical relevance judgment in ≤30 words.
 
-Return exactly one JSON object — no prose, no markdown fences. The four patterns below are options, not all to be returned. Choose whichever applies and write your own reason in ≤30 words:
-{"query": "<question ≤20 words>", "reason": "<≤30 words>", "answerable_by_chunk": true, "clinically_useful": true}
-{"query": "<question ≤20 words>", "reason": "<≤30 words>", "answerable_by_chunk": true, "clinically_useful": false}
-{"query": "<question ≤20 words>", "reason": "<≤30 words>", "answerable_by_chunk": false, "clinically_useful": true}
-{"query": null, "reason": "<≤30 words>", "answerable_by_chunk": false, "clinically_useful": false}"""
+Return exactly one JSON object — no prose, no markdown fences:
+{"query": "<question ≤20 words>", "reason": "<≤30 words>"}
+{"query": null, "reason": "<≤30 words>"}"""
 
-RESULT_SCHEMA_VERSION = "answerable-clinically-useful-v1"
+RESULT_SCHEMA_VERSION = "query-reason-v1"
 PROMPT_HASH = hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest()[:16]
 
 
@@ -171,8 +168,6 @@ def _matches_current_result_contract(rec: dict[str, Any], backend: str, model: s
         and rec.get("llm_filter_prompt_hash") == PROMPT_HASH
         and rec.get("llm_backend") == backend
         and rec.get("llm_model") == model
-        and "answerable_by_chunk" in rec
-        and "clinically_useful" in rec
     )
 
 
@@ -183,21 +178,11 @@ def _matches_current_output_contract(rec: dict[str, Any], backend: str, model: s
         and rec.get("llm_backend") == backend
         and rec.get("llm_model") == model
         and "seed_query" in rec
-        and "llm_answerable_by_chunk" in rec
-        and "llm_clinically_useful" in rec
     )
 
 
-def _as_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"true", "yes", "1"}
-    return bool(value)
-
-
 def _should_keep(result: dict[str, Any]) -> bool:
-    return bool(result["answerable_by_chunk"] and result["clinically_useful"])
+    return result.get("query") is not None
 
 
 def _call_ollama(
@@ -209,7 +194,7 @@ def _call_ollama(
     temperature: float,
     think: bool,
 ) -> dict[str, Any]:
-    """Call Ollama and return the query plus answerability/usefulness judgments."""
+    """Call Ollama and return the clinical relevance judgment and query."""
     text = chunk.get("text", "").strip()
     breadcrumb = chunk.get("breadcrumb", "").strip()
 
@@ -242,8 +227,6 @@ def _call_ollama(
 
     raw = response["message"]["content"].strip()
     parsed = json.loads(raw)
-    answerable_by_chunk = _as_bool(parsed.get("answerable_by_chunk", False))
-    clinically_useful = _as_bool(parsed.get("clinically_useful", False))
 
     return {
         "chunk_id": chunk["chunk_id"],
@@ -253,8 +236,6 @@ def _call_ollama(
         "llm_model": model,
         "query": parsed.get("query") or None,
         "reason": str(parsed.get("reason", "")),
-        "answerable_by_chunk": answerable_by_chunk,
-        "clinically_useful": clinically_useful,
     }
 
 
@@ -310,8 +291,6 @@ def _call_openai(
 
     raw = response["choices"][0]["message"]["content"].strip()
     parsed = json.loads(raw)
-    answerable_by_chunk = _as_bool(parsed.get("answerable_by_chunk", False))
-    clinically_useful = _as_bool(parsed.get("clinically_useful", False))
 
     return {
         "chunk_id": chunk["chunk_id"],
@@ -321,8 +300,6 @@ def _call_openai(
         "llm_model": model,
         "query": parsed.get("query") or None,
         "reason": str(parsed.get("reason", "")),
-        "answerable_by_chunk": answerable_by_chunk,
-        "clinically_useful": clinically_useful,
     }
 
 
@@ -367,8 +344,6 @@ def _process_one(
         "llm_model": model,
         "query": None,
         "reason": f"error: {type(last_err).__name__}",
-        "answerable_by_chunk": False,
-        "clinically_useful": False,
     }
 
 
@@ -446,8 +421,6 @@ def main() -> int:
             out_rec["llm_backend"] = result["llm_backend"]
             out_rec["llm_model"] = result["llm_model"]
             out_rec["seed_query"] = result["query"]
-            out_rec["llm_answerable_by_chunk"] = result["answerable_by_chunk"]
-            out_rec["llm_clinically_useful"] = result["clinically_useful"]
             out_rec["llm_filter_reason"] = result["reason"]
             with output_lock:
                 output_fh.write(json.dumps(out_rec) + "\n")
