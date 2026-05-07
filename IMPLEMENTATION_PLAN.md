@@ -84,6 +84,8 @@ are clearly unsuitable for clinical query generation, including:
 - citation/front-matter chunks such as "Suggested citation", "Endorsed by",
   "Acknowledgements", "Foreword", "References", and "Table of Contents"
 - copyright or license-only chunks
+- web-resource/contact-link chunks
+- mostly empty form/template tables
 - heading-only chunks with no meaningful body text
 
 Do not use an LLM for this filter. The first implementation should keep the

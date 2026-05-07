@@ -154,6 +154,7 @@ One JSON object per line. Output of `sample_chunks.py`.
   "chunk_id": "dcaeb591065c7c22",
   "source": "msf-essential-obstetric-and-newborn-care",
   "tier": "very_high",
+  "section": "Postpartum Haemorrhage",
   "page": 14,
   "breadcrumb": "Postpartum Haemorrhage > Active Management of Third Stage",
   "text": "...(full chunk text, without the [SOURCE:|PAGE:|CID:] prefix)..."
@@ -327,6 +328,8 @@ Parsing logic:
 4. Filter out boilerplate chunks before sampling. Boilerplate heuristics:
    - Chunk text (excluding breadcrumb) is shorter than 100 characters
    - Chunk text matches patterns like "Suggested citation:", "Endorsed by:", "Table of Contents", "References", "Acknowledgements", "Foreword"
+   - Chunk text is a web-resource/contact-link list rather than clinical content
+   - Chunk text is a mostly empty form/template table
    - Chunk consists only of a heading line with no body content
 5. Sample using stratified random sampling (shuffle filtered chunks, take first N). Set `random.seed(42)` for reproducibility.
 6. Write each sampled chunk as one JSON line to `data/sampled_chunks.jsonl`.
