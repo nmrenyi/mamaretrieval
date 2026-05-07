@@ -45,7 +45,7 @@ Your task has three steps:
 2. Generate ONE clinical question that a practicing midwife or nurse would type into a clinical reference system — a direct question, not a conversational sentence.
    The question must be ≤20 words and specific enough that only one or two guideline sections would answer it — not so broad that any clinical text would be relevant.
 3. Given the chunk text and your generated question, evaluate both:
-   - answerable_by_chunk: whether the chunk contains enough information to directly answer the question. If the chunk contains specific enough information to directly inform at least one clinical action, treat as answerable_by_chunk=true — even if the answer is incomplete.
+   - answerable_by_chunk: whether the chunk contains enough information to directly answer the question. Treat as answerable_by_chunk=true if the chunk contains the key fact, step, indication, warning, or recommendation needed to answer the question — even if the answer is incomplete.
    - clinically_useful: whether the question is useful for direct clinical care.
 
 The reason must explain both why the generated question is or is not answerable from the chunk and why it is or is not clinically useful, in ≤30 words.
