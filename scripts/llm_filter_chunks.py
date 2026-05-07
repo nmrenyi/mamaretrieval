@@ -39,7 +39,7 @@ Your task has two steps:
 1. Generate ONE clinical question that a practicing midwife or nurse would search for when encountering this clinical topic.
    The question must be ≤20 words and specific enough that only one or two guideline sections would answer it — not so broad that any clinical text would be relevant.
 2. Given the chunk text and your generated question, evaluate both:
-   - answerable_by_chunk: whether the chunk contains enough information to directly answer the question.
+   - answerable_by_chunk: whether the chunk contains enough information to directly answer the question. If the chunk contains specific enough information to directly inform at least one clinical action, treat as answerable_by_chunk=true — even if the answer is incomplete.
    - clinically_useful: whether the question is useful for direct clinical care.
 
 The reason must explain both why the generated question is or is not answerable from the chunk and why it is or is not clinically useful.
@@ -59,6 +59,7 @@ A question is clinically useful if it asks about:
 - Risk factors, complications, or emergency responses
 - Evidence-based clinical recommendations for patient care
 
+If the chunk's primary purpose is educational, administrative, or bibliographic — regardless of whether the topic is clinical — treat as clinically_useful=false.
 A question is not clinically useful if the chunk is primarily:
 - Educator instructions (ask students, group activities, classroom exercises)
 - Student reflection prompts or scenario discussion questions
