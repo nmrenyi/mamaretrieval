@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import time
@@ -74,6 +75,9 @@ Return exactly one JSON object — no prose, no markdown fences. The four patter
 {"query": "<question ≤20 words>", "reason": "<≤30 words>", "answerable_by_chunk": false, "clinically_useful": true}
 {"query": null, "reason": "<≤30 words>", "answerable_by_chunk": false, "clinically_useful": false}"""
 
+RESULT_SCHEMA_VERSION = "answerable-clinically-useful-v1"
+PROMPT_HASH = hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest()[:16]
+
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -109,17 +113,40 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _load_done_ids(results_path: Path) -> set[str]:
+def _load_done_ids(results_path: Path) -> tuple[set[str], int]:
     if not results_path.exists():
-        return set()
+        return set(), 0
     done = set()
+    stale = 0
     with results_path.open(encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if line:
                 rec = json.loads(line)
-                done.add(rec["chunk_id"])
-    return done
+                if _matches_current_result_contract(rec):
+                    done.add(rec["chunk_id"])
+                else:
+                    stale += 1
+    return done, stale
+
+
+def _matches_current_result_contract(rec: dict[str, Any]) -> bool:
+    return (
+        rec.get("llm_filter_schema_version") == RESULT_SCHEMA_VERSION
+        and rec.get("llm_filter_prompt_hash") == PROMPT_HASH
+        and "answerable_by_chunk" in rec
+        and "clinically_useful" in rec
+    )
+
+
+def _matches_current_output_contract(rec: dict[str, Any]) -> bool:
+    return (
+        rec.get("llm_filter_schema_version") == RESULT_SCHEMA_VERSION
+        and rec.get("llm_filter_prompt_hash") == PROMPT_HASH
+        and "seed_query" in rec
+        and "llm_answerable_by_chunk" in rec
+        and "llm_clinically_useful" in rec
+    )
 
 
 def _as_bool(value: Any) -> bool:
@@ -180,6 +207,8 @@ def _call_ollama(
 
     return {
         "chunk_id": chunk["chunk_id"],
+        "llm_filter_schema_version": RESULT_SCHEMA_VERSION,
+        "llm_filter_prompt_hash": PROMPT_HASH,
         "query": parsed.get("query") or None,
         "reason": str(parsed.get("reason", "")),
         "answerable_by_chunk": answerable_by_chunk,
@@ -212,6 +241,8 @@ def _process_one(
 
     return {
         "chunk_id": chunk["chunk_id"],
+        "llm_filter_schema_version": RESULT_SCHEMA_VERSION,
+        "llm_filter_prompt_hash": PROMPT_HASH,
         "query": None,
         "reason": f"error: {type(last_err).__name__}",
         "answerable_by_chunk": False,
@@ -234,8 +265,12 @@ def main() -> int:
 
     done_ids: set[str] = set()
     if args.resume:
-        done_ids = _load_done_ids(results_path)
-        print(f"Resuming: {len(done_ids)} chunks already judged, skipping.")
+        done_ids, stale_count = _load_done_ids(results_path)
+        print(f"Resuming: {len(done_ids)} current-schema chunks already judged, skipping.")
+        if stale_count:
+            print(
+                f"Ignoring {stale_count} stale judgments from an older prompt/schema."
+            )
 
     todo = [c for c in chunks if c["chunk_id"] not in done_ids]
     if args.limit > 0:
@@ -283,6 +318,8 @@ def main() -> int:
         elif _should_keep(result):
             kept += 1
             out_rec = dict(chunk_rec)
+            out_rec["llm_filter_schema_version"] = RESULT_SCHEMA_VERSION
+            out_rec["llm_filter_prompt_hash"] = PROMPT_HASH
             out_rec["seed_query"] = result["query"]
             out_rec["llm_answerable_by_chunk"] = result["answerable_by_chunk"]
             out_rec["llm_clinically_useful"] = result["clinically_useful"]
@@ -353,6 +390,8 @@ def main() -> int:
             if not line:
                 continue
             rec = json.loads(line)
+            if not _matches_current_output_contract(rec):
+                continue
             if rec["chunk_id"] not in seen:
                 seen.add(rec["chunk_id"])
                 deduped.append(rec)
