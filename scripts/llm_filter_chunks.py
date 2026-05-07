@@ -173,13 +173,6 @@ def _call_ollama(
         response = json.loads(resp.read())
 
     raw = response["message"]["content"].strip()
-
-    # Strip markdown code fences if the model wraps output
-    if raw.startswith("```"):
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        raw = raw[start:end] if start >= 0 else raw
-
     parsed = json.loads(raw)
     answerable_by_chunk = _as_bool(parsed.get("answerable_by_chunk", False))
     clinically_useful = _as_bool(parsed.get("clinically_useful", False))
@@ -306,7 +299,12 @@ def main() -> int:
         eta = remaining / rate if rate > 0 else float("inf")
         eta_str = f"{eta / 60:.0f}m" if eta < 7200 else "—"
 
-        status = "KEEP" if _should_keep(result) else "SKIP"
+        if reason.startswith("error:"):
+            status = "ERR"
+        elif _should_keep(result):
+            status = "KEEP"
+        else:
+            status = "SKIP"
         query_preview = (result["query"] or "")[:60]
         print(
             f"[{total_done:>4}/{len(todo)}] {status} | "
