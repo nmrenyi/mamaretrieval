@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """LLM-based chunk filter.
 
-For each sampled chunk, asks a local Ollama model to generate a clinical query
-and judge whether the query is meaningful from a midwife's perspective.
-Chunks that yield a meaningful query are kept; others are discarded.
+For each sampled chunk, asks a local Ollama model to understand the chunk,
+generate a clinical query it can answer, and judge whether the query is
+answerable and clinically useful. Chunks passing both checks are kept.
 
 Usage:
     python scripts/llm_filter_chunks.py                  # full run
@@ -35,16 +35,32 @@ DEFAULT_RESULTS = Path("data/llm_filter_results.jsonl")
 
 SYSTEM_PROMPT = """You evaluate text chunks from midwifery and obstetrics clinical guidelines.
 
-Your task: generate ONE specific clinical question that a practicing midwife or nurse would search for when providing direct patient care, then decide whether the question is clinically useful.
+Your task has three steps:
+1. First, fully understand what the chunk is explaining.
+2. Generate ONE clinical question that this chunk is aiming to answer for a practicing midwife or nurse providing direct patient care.
+3. Given the chunk text and your generated question, evaluate both:
+   - answerable_by_chunk: whether the chunk contains enough information to directly answer the question.
+   - clinically_useful: whether the question is useful for direct clinical care.
 
-A question IS clinically useful if it asks about:
+The question must be grounded in the chunk. Do not generate a broad related question if the chunk itself does not answer it.
+The reason must explain both why the generated question is or is not answerable from the chunk and why it is or is not clinically useful.
+Evaluate answerable_by_chunk and clinically_useful independently:
+- answerable_by_chunk can be true while clinically_useful is false if the chunk answers a question, but that question is educational, administrative, bibliographic, or otherwise not useful for direct patient care.
+- answerable_by_chunk can be false while clinically_useful is true if the generated question is clinically useful, but the chunk lacks enough information to answer it.
+Valid decision patterns include:
+- {"query": "<question>", "reason": "Chunk answers it and it guides care.", "answerable_by_chunk": true, "clinically_useful": true}
+- {"query": "<question>", "reason": "Chunk answers it, but it is not direct care.", "answerable_by_chunk": true, "clinically_useful": false}
+- {"query": "<question>", "reason": "Clinically useful, but chunk lacks the answer.", "answerable_by_chunk": false, "clinically_useful": true}
+- {"query": null, "reason": "No meaningful clinical or answerable question.", "answerable_by_chunk": false, "clinically_useful": false}
+
+A question is clinically useful if it asks about:
 - Diagnosis, assessment, or recognition of a condition
 - Clinical management steps, procedures, or protocols
 - Drug names, dosages, routes, or contraindications
 - Risk factors, complications, or emergency responses
 - Evidence-based clinical recommendations for patient care
 
-A question is NOT clinically useful if the chunk is primarily:
+A question is not clinically useful if the chunk is primarily:
 - Educator instructions (ask students, group activities, classroom exercises)
 - Student reflection prompts or scenario discussion questions
 - Module / chapter structure overviews or table-of-contents listings
@@ -52,10 +68,10 @@ A question is NOT clinically useful if the chunk is primarily:
 - Very sparse incomplete fragments
 
 Respond with JSON only — no prose, no markdown fences:
-{"query": "<clinical question, ≤20 words>", "suitable": true, "reason": "<≤5 words>"}
+{"query": "<clinical question>", "reason": "<explanation>", "answerable_by_chunk": true, "clinically_useful": true}
 
 If no meaningful clinical query is possible, respond:
-{"query": null, "suitable": false, "reason": "<≤5 words>"}"""
+{"query": null, "reason": "<explanation>", "answerable_by_chunk": false, "clinically_useful": false}"""
 
 
 def _parse_args() -> argparse.Namespace:
@@ -105,6 +121,18 @@ def _load_done_ids(results_path: Path) -> set[str]:
     return done
 
 
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "1"}
+    return bool(value)
+
+
+def _should_keep(result: dict[str, Any]) -> bool:
+    return bool(result["answerable_by_chunk"] and result["clinically_useful"])
+
+
 def _call_ollama(
     chunk: dict[str, Any],
     model: str,
@@ -113,7 +141,7 @@ def _call_ollama(
     temperature: float,
     think: bool,
 ) -> dict[str, Any]:
-    """Call Ollama and return a result dict with chunk_id, suitable, query, reason."""
+    """Call Ollama and return the query plus answerability/usefulness judgments."""
     text = chunk.get("text", "").strip()
     breadcrumb = chunk.get("breadcrumb", "").strip()
 
@@ -153,11 +181,15 @@ def _call_ollama(
         raw = raw[start:end] if start >= 0 else raw
 
     parsed = json.loads(raw)
+    answerable_by_chunk = _as_bool(parsed.get("answerable_by_chunk", False))
+    clinically_useful = _as_bool(parsed.get("clinically_useful", False))
+
     return {
         "chunk_id": chunk["chunk_id"],
-        "suitable": bool(parsed.get("suitable", False)),
         "query": parsed.get("query") or None,
         "reason": str(parsed.get("reason", "")),
+        "answerable_by_chunk": answerable_by_chunk,
+        "clinically_useful": clinically_useful,
     }
 
 
@@ -186,9 +218,10 @@ def _process_one(
 
     return {
         "chunk_id": chunk["chunk_id"],
-        "suitable": False,
         "query": None,
         "reason": f"error: {type(last_err).__name__}",
+        "answerable_by_chunk": False,
+        "clinically_useful": False,
     }
 
 
@@ -253,10 +286,13 @@ def main() -> int:
         reason = result["reason"]
         if reason.startswith("error:"):
             errors += 1
-        elif result["suitable"]:
+        elif _should_keep(result):
             kept += 1
             out_rec = dict(chunk_rec)
             out_rec["seed_query"] = result["query"]
+            out_rec["llm_answerable_by_chunk"] = result["answerable_by_chunk"]
+            out_rec["llm_clinically_useful"] = result["clinically_useful"]
+            out_rec["llm_filter_reason"] = result["reason"]
             with output_lock:
                 output_fh.write(json.dumps(out_rec) + "\n")
                 output_fh.flush()
@@ -270,7 +306,7 @@ def main() -> int:
         eta = remaining / rate if rate > 0 else float("inf")
         eta_str = f"{eta / 60:.0f}m" if eta < 7200 else "—"
 
-        status = "KEEP" if result["suitable"] else "SKIP"
+        status = "KEEP" if _should_keep(result) else "SKIP"
         query_preview = (result["query"] or "")[:60]
         print(
             f"[{total_done:>4}/{len(todo)}] {status} | "
