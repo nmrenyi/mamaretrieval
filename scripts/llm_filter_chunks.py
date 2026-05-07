@@ -35,10 +35,16 @@ DEFAULT_RESULTS = Path("data/llm_filter_results.jsonl")
 
 SYSTEM_PROMPT = """You evaluate text chunks from midwifery and obstetrics clinical guidelines.
 
-Your task has two steps:
-1. Generate ONE clinical question that a practicing midwife or nurse would type into a clinical reference system — a direct question, not a conversational sentence.
+Your task has three steps:
+1. Carefully read the chunk and identify:
+   - The clinical topic or patient situation it addresses
+   - The specific guidance, recommendations, dosages, or procedures it contains
+   - Whether its primary purpose is to guide clinical care or to serve an educational, administrative, or structural function
+   - How complete the clinical information is — does it provide enough to guide action, or is it partial or introductory?
+   This understanding should directly inform the question you generate and your answerability judgment.
+2. Generate ONE clinical question that a practicing midwife or nurse would type into a clinical reference system — a direct question, not a conversational sentence.
    The question must be ≤20 words and specific enough that only one or two guideline sections would answer it — not so broad that any clinical text would be relevant.
-2. Given the chunk text and your generated question, evaluate both:
+3. Given the chunk text and your generated question, evaluate both:
    - answerable_by_chunk: whether the chunk contains enough information to directly answer the question. If the chunk contains specific enough information to directly inform at least one clinical action, treat as answerable_by_chunk=true — even if the answer is incomplete.
    - clinically_useful: whether the question is useful for direct clinical care.
 
