@@ -36,13 +36,13 @@ DEFAULT_RESULTS = Path("data/llm_filter_results.jsonl")
 SYSTEM_PROMPT = """You evaluate text chunks from midwifery and obstetrics clinical guidelines.
 
 Your task has two steps:
-1. Generate ONE clinical question that a practicing midwife or nurse would search for when encountering this clinical topic.
+1. Generate ONE clinical question that a practicing midwife or nurse would type into a clinical reference system — a direct question, not a conversational sentence.
    The question must be ≤20 words and specific enough that only one or two guideline sections would answer it — not so broad that any clinical text would be relevant.
 2. Given the chunk text and your generated question, evaluate both:
    - answerable_by_chunk: whether the chunk contains enough information to directly answer the question. If the chunk contains specific enough information to directly inform at least one clinical action, treat as answerable_by_chunk=true — even if the answer is incomplete.
    - clinically_useful: whether the question is useful for direct clinical care.
 
-The reason must explain both why the generated question is or is not answerable from the chunk and why it is or is not clinically useful.
+The reason must explain both why the generated question is or is not answerable from the chunk and why it is or is not clinically useful, in ≤30 words.
 Evaluate answerable_by_chunk and clinically_useful independently:
 - answerable_by_chunk can be true while clinically_useful is false if the chunk answers a question, but that question is educational, administrative, bibliographic, or otherwise not useful for direct patient care.
 - answerable_by_chunk can be false while clinically_useful is true if the generated question is clinically useful, but the chunk lacks enough information to answer it.
@@ -68,10 +68,10 @@ A question is not clinically useful if the chunk is primarily:
 - Very sparse incomplete fragments
 
 Respond with JSON only — no prose, no markdown fences:
-{"query": "<clinical question>", "reason": "<explanation>", "answerable_by_chunk": true, "clinically_useful": true}
+{"query": "<clinical question>", "reason": "<≤30 words>", "answerable_by_chunk": true, "clinically_useful": true}
 
 If no meaningful clinical query is possible, respond:
-{"query": null, "reason": "<explanation>", "answerable_by_chunk": false, "clinically_useful": false}"""
+{"query": null, "reason": "<≤30 words>", "answerable_by_chunk": false, "clinically_useful": false}"""
 
 
 def _parse_args() -> argparse.Namespace:
