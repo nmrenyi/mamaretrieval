@@ -68,7 +68,7 @@ A question is not clinically useful if the chunk is primarily:
 - Bibliography or reference lists
 - Very sparse incomplete fragments
 
-Respond with JSON only — no prose, no markdown fences. Use whichever pattern applies and write your own reason in ≤30 words:
+Return exactly one JSON object — no prose, no markdown fences. The four patterns below are options, not all to be returned. Choose whichever applies and write your own reason in ≤30 words:
 {"query": "<question ≤20 words>", "reason": "<≤30 words>", "answerable_by_chunk": true, "clinically_useful": true}
 {"query": "<question ≤20 words>", "reason": "<≤30 words>", "answerable_by_chunk": true, "clinically_useful": false}
 {"query": "<question ≤20 words>", "reason": "<≤30 words>", "answerable_by_chunk": false, "clinically_useful": true}
