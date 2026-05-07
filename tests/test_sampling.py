@@ -25,7 +25,8 @@ def chunk(
     body = text or (
         "## Clinical heading\n\n"
         "This chunk contains clinically useful body text about treatment, "
-        "assessment, referral, and follow-up for a bedside care scenario."
+        "assessment, referral, and follow-up care for patients. "
+        "It covers maternal health management during antenatal and postnatal periods."
     )
     return CorpusChunk(
         chunk_id=chunk_id,
@@ -69,7 +70,8 @@ class SamplingTests(unittest.TestCase):
                 text=(
                     "## Suggested citation\n\n"
                     "This publication should be cited using the following long "
-                    "bibliographic citation and publication metadata."
+                    "bibliographic citation and publication metadata for reference purposes. "
+                    "Please include all authors and the year of publication."
                 ),
             )
         )
@@ -82,7 +84,9 @@ class SamplingTests(unittest.TestCase):
                 "c" * 16,
                 text=(
                     "# This is a very long heading that has enough characters "
-                    "to pass the short-text threshold but still has no body text"
+                    "to pass the short-text threshold but still has no body text\n\n"
+                    "## Additional section heading for maternal health topics\n\n"
+                    "### Third level heading covering postnatal care and follow-up"
                 ),
             )
         )
@@ -109,7 +113,9 @@ class SamplingTests(unittest.TestCase):
                     "|---|---|\n"
                     "| Labour care | 12 |\n"
                     "| Postpartum care | 20 |\n"
-                    "This table previews chapter sections and page numbers."
+                    "| Antenatal care | 35 |\n"
+                    "| Emergency obstetric care | 48 |\n"
+                    "This table previews chapter sections and page numbers for clinical reference."
                 ),
             )
         )
@@ -123,7 +129,8 @@ class SamplingTests(unittest.TestCase):
                 text=(
                     "# Activity\n\n"
                     "Find out what the local emergency number is and discuss "
-                    "the answer with your classmates during the teaching session."
+                    "the answer with your classmates during the teaching session. "
+                    "Note the contact details for your district health office and referral pathway."
                 ),
             )
         )
@@ -139,7 +146,9 @@ class SamplingTests(unittest.TestCase):
                     "### i 4 hours and 40 minutes\n\n"
                     "| Title | Minutes | Activities | Preparations | Page |\n"
                     "|---|---|---|---|---|\n"
-                    "| Group work | 30 | Discuss | Prepare handouts | 10 |"
+                    "| Group work | 30 | Discuss | Prepare handouts | 10 |\n"
+                    "| Case study | 45 | Role play | Review scenarios | 22 |\n"
+                    "| Plenary session | 20 | Feedback | Summarise key points | 35 |"
                 ),
             )
         )
@@ -153,8 +162,9 @@ class SamplingTests(unittest.TestCase):
                 text=(
                     "## **A**\n\n"
                     "**Anaemia** A condition where blood has too little haemoglobin.\n\n"
-                    "**Antenatal** Before birth.\n\n"
-                    "**Antibiotic** A drug used to treat infection."
+                    "**Antenatal** The period before birth during pregnancy.\n\n"
+                    "**Antibiotic** A drug used to treat bacterial infection.\n\n"
+                    "**Asphyxia** Oxygen deprivation at birth requiring immediate resuscitation."
                 ),
             )
         )
@@ -184,7 +194,9 @@ class SamplingTests(unittest.TestCase):
                     "| Resource | URL |\n"
                     "|---|---|\n"
                     "| Fertility chart | www.example.org |\n"
-                    "| Patient handout | www.example.net |"
+                    "| Patient handout | www.example.net |\n"
+                    "| Clinical guidelines | www.who.int/guidelines |\n"
+                    "| Obstetric emergency protocols | www.example.com/protocols |"
                 ),
             )
         )
@@ -281,6 +293,73 @@ class SamplingTests(unittest.TestCase):
         )
         self.assertEqual(first_report.sampled_chunks, second_report.sampled_chunks)
         self.assertEqual(len(first), 10)
+
+
+    def test_boilerplate_filters_show_slide_instruction(self) -> None:
+        reason = boilerplate_reason(
+            chunk(
+                "7" * 16,
+                text=(
+                    "# Show slide 24. Explain example table to learners in group 2.\n\n"
+                    "Facilitators explain that the six blank boxes are categories of mistreatment "
+                    "of newborns. Learners will use examples from their reflection and discussions "
+                    "to complete the boxes. This is a group exercise for the session."
+                ),
+            )
+        )
+
+        self.assertEqual(reason, "educator_instruction")
+
+    def test_boilerplate_filters_scenario_reflection_questions(self) -> None:
+        reason = boilerplate_reason(
+            chunk(
+                "8" * 16,
+                text=(
+                    "## Effective communication\n\n"
+                    "Appropriate and effective communication is expected as an important "
+                    "part of a midwife's role. This will include communication with the woman "
+                    "and her family as well as appropriate referral to other team members.\n\n"
+                    "Questions that arise from the scenario might include: What key questions "
+                    "will she ask about symptoms? How will she contact immediate help?"
+                ),
+            )
+        )
+
+        self.assertEqual(reason, "scenario_reflection")
+
+    def test_boilerplate_filters_student_competence_assessment(self) -> None:
+        reason = boilerplate_reason(
+            chunk(
+                "9" * 16,
+                text=(
+                    "### SKILL: ARRANGING ISOLATION CARE\n\n"
+                    "Where possible a midwife should be allocated to care specifically for "
+                    "this mother and her baby. It may also be helpful to have a relative assist "
+                    "with their care. If so, the relative must be instructed in basic infection "
+                    "prevention principles.\n\n"
+                    "**Assessing competence** *In order to confirm that a student is competent, "
+                    "the answer to these questions must be yes.*"
+                ),
+            )
+        )
+
+        self.assertEqual(reason, "scenario_reflection")
+
+    def test_boilerplate_filters_module_overview(self) -> None:
+        reason = boilerplate_reason(
+            chunk(
+                "a" * 16,
+                text=(
+                    "### Managing puerperal sepsis\n\n"
+                    "This module begins with an explanation of the problem of puerperal sepsis. "
+                    "The content then covers the factors which contribute to the infection, how "
+                    "it can be identified and differentiated from other conditions, how it can "
+                    "be prevented and, if it does occur, how it can be managed."
+                ),
+            )
+        )
+
+        self.assertEqual(reason, "scenario_reflection")
 
 
 if __name__ == "__main__":
