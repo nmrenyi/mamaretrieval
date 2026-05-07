@@ -1,0 +1,307 @@
+#!/usr/bin/env python
+"""LLM-based chunk filter.
+
+For each sampled chunk, asks a local Ollama model to generate a clinical query
+and judge whether the query is meaningful from a midwife's perspective.
+Chunks that yield a meaningful query are kept; others are discarded.
+
+Usage:
+    python scripts/llm_filter_chunks.py                  # full run
+    python scripts/llm_filter_chunks.py --limit 20       # test run
+    python scripts/llm_filter_chunks.py --resume         # continue after interruption
+    python scripts/llm_filter_chunks.py --workers 4      # increase concurrency
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+import urllib.request
+import urllib.error
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from threading import Lock
+from typing import Any
+
+
+OLLAMA_URL = "http://localhost:11434/api/chat"
+DEFAULT_MODEL = "qwen3.5:9b"
+DEFAULT_INPUT = Path("data/sampled_chunks.jsonl")
+DEFAULT_OUTPUT = Path("data/llm_filtered_chunks.jsonl")
+DEFAULT_RESULTS = Path("data/llm_filter_results.jsonl")
+
+SYSTEM_PROMPT = """You evaluate text chunks from midwifery and obstetrics clinical guidelines.
+
+Your task: generate ONE specific clinical question that a practicing midwife or nurse would search for when providing direct patient care, then decide whether the question is clinically useful.
+
+A question IS clinically useful if it asks about:
+- Diagnosis, assessment, or recognition of a condition
+- Clinical management steps, procedures, or protocols
+- Drug names, dosages, routes, or contraindications
+- Risk factors, complications, or emergency responses
+- Evidence-based clinical recommendations for patient care
+
+A question is NOT clinically useful if the chunk is primarily:
+- Educator instructions (ask students, group activities, classroom exercises)
+- Student reflection prompts or scenario discussion questions
+- Module / chapter structure overviews or table-of-contents listings
+- Bibliography or reference lists
+- Very sparse incomplete fragments
+
+Respond with JSON only — no prose, no markdown fences:
+{"query": "<clinical question, ≤20 words>", "suitable": true, "reason": "<≤5 words>"}
+
+If no meaningful clinical query is possible, respond:
+{"query": null, "suitable": false, "reason": "<≤5 words>"}"""
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input", default=str(DEFAULT_INPUT))
+    parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
+    parser.add_argument("--results", default=str(DEFAULT_RESULTS),
+                        help="JSONL file logging every judgment (used for --resume).")
+    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--limit", type=int, default=0,
+                        help="Process at most N chunks (0 = all).")
+    parser.add_argument("--resume", action="store_true",
+                        help="Skip chunk_ids already present in --results.")
+    parser.add_argument("--workers", type=int, default=2,
+                        help="Concurrent Ollama requests. Default 2.")
+    parser.add_argument("--timeout", type=int, default=180,
+                        help="Per-request timeout in seconds. Default 180.")
+    return parser.parse_args()
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    records = []
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+    return records
+
+
+def _load_done_ids(results_path: Path) -> set[str]:
+    if not results_path.exists():
+        return set()
+    done = set()
+    with results_path.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                rec = json.loads(line)
+                done.add(rec["chunk_id"])
+    return done
+
+
+def _call_ollama(
+    chunk: dict[str, Any],
+    model: str,
+    timeout: int,
+) -> dict[str, Any]:
+    """Call Ollama and return a result dict with chunk_id, suitable, query, reason."""
+    text = chunk.get("text", "").strip()
+    breadcrumb = chunk.get("breadcrumb", "").strip()
+
+    if breadcrumb:
+        user_content = f"Breadcrumb: {breadcrumb}\n\nChunk:\n{text}"
+    else:
+        user_content = f"Chunk:\n{text}"
+
+    payload = json.dumps({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        "stream": False,
+        "think": True,
+        "options": {"temperature": 0.6, "top_p": 0.95, "num_predict": 8192},
+    }).encode()
+
+    req = urllib.request.Request(
+        OLLAMA_URL, data=payload, headers={"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        response = json.loads(resp.read())
+
+    raw = response["message"]["content"].strip()
+
+    # Strip markdown code fences if the model wraps output
+    if raw.startswith("```"):
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        raw = raw[start:end] if start >= 0 else raw
+
+    parsed = json.loads(raw)
+    return {
+        "chunk_id": chunk["chunk_id"],
+        "suitable": bool(parsed.get("suitable", False)),
+        "query": parsed.get("query") or None,
+        "reason": str(parsed.get("reason", "")),
+    }
+
+
+def _process_one(
+    chunk: dict[str, Any],
+    model: str,
+    timeout: int,
+    retries: int = 2,
+) -> dict[str, Any]:
+    """Attempt to judge one chunk, retrying on transient errors."""
+    last_err: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            return _call_ollama(chunk, model, timeout)
+        except (json.JSONDecodeError, KeyError) as exc:
+            last_err = exc
+            # Model returned malformed JSON — skip without retry
+            break
+        except Exception as exc:
+            last_err = exc
+            if attempt < retries:
+                time.sleep(2 ** attempt)
+
+    return {
+        "chunk_id": chunk["chunk_id"],
+        "suitable": False,
+        "query": None,
+        "reason": f"error: {type(last_err).__name__}",
+    }
+
+
+def main() -> int:
+    args = _parse_args()
+    input_path = Path(args.input)
+    output_path = Path(args.output)
+    results_path = Path(args.results)
+
+    if not input_path.exists():
+        print(f"Input not found: {input_path}", file=sys.stderr)
+        return 1
+
+    chunks = _read_jsonl(input_path)
+    print(f"Loaded {len(chunks)} sampled chunks from {input_path}")
+
+    done_ids: set[str] = set()
+    if args.resume:
+        done_ids = _load_done_ids(results_path)
+        print(f"Resuming: {len(done_ids)} chunks already judged, skipping.")
+
+    todo = [c for c in chunks if c["chunk_id"] not in done_ids]
+    if args.limit > 0:
+        todo = todo[: args.limit]
+
+    if not todo:
+        print("Nothing to process.")
+        return 0
+
+    print(
+        f"Processing {len(todo)} chunks with model={args.model}, "
+        f"workers={args.workers}, timeout={args.timeout}s"
+    )
+    print("Output chunks →", output_path)
+    print("All judgments →", results_path)
+    print()
+
+    results_lock = Lock()
+    output_lock = Lock()
+    kept = 0
+    discarded = 0
+    errors = 0
+    start_time = time.monotonic()
+
+    # Append mode so --resume continues correctly
+    results_fh = results_path.open("a", encoding="utf-8")
+    output_fh = output_path.open("a", encoding="utf-8")
+
+    # Build a lookup from chunk_id to full chunk record
+    chunk_by_id = {c["chunk_id"]: c for c in chunks}
+
+    def _done_callback(result: dict[str, Any]) -> None:
+        nonlocal kept, discarded, errors
+
+        chunk_rec = chunk_by_id[result["chunk_id"]]
+
+        with results_lock:
+            results_fh.write(json.dumps(result) + "\n")
+            results_fh.flush()
+
+        reason = result["reason"]
+        if reason.startswith("error:"):
+            errors += 1
+        elif result["suitable"]:
+            kept += 1
+            out_rec = dict(chunk_rec)
+            out_rec["seed_query"] = result["query"]
+            with output_lock:
+                output_fh.write(json.dumps(out_rec) + "\n")
+                output_fh.flush()
+        else:
+            discarded += 1
+
+        total_done = kept + discarded + errors
+        elapsed = time.monotonic() - start_time
+        rate = total_done / elapsed if elapsed > 0 else 0
+        remaining = len(todo) - total_done
+        eta = remaining / rate if rate > 0 else float("inf")
+        eta_str = f"{eta / 60:.0f}m" if eta < 7200 else "—"
+
+        status = "KEEP" if result["suitable"] else "SKIP"
+        query_preview = (result["query"] or "")[:60]
+        print(
+            f"[{total_done:>4}/{len(todo)}] {status} | "
+            f"{rate:.1f}/s ETA {eta_str} | "
+            f"{result['chunk_id'][:8]} | {query_preview}"
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            futures = {
+                pool.submit(_process_one, chunk, args.model, args.timeout): chunk
+                for chunk in todo
+            }
+            for future in as_completed(futures):
+                result = future.result()
+                _done_callback(result)
+    finally:
+        results_fh.close()
+        output_fh.close()
+
+    elapsed = time.monotonic() - start_time
+    total = kept + discarded + errors
+    print()
+    print(f"Done in {elapsed:.0f}s  ({total} judged, {kept} kept, {discarded} discarded, {errors} errors)")
+    print(f"Kept rate: {100 * kept / total:.1f}%" if total else "")
+
+    # Write a single consolidated output (re-read and deduplicate in case of resume)
+    if not args.resume:
+        return 0
+
+    # On resume the output file may have duplicates from earlier runs — deduplicate
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    with output_path.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            if rec["chunk_id"] not in seen:
+                seen.add(rec["chunk_id"])
+                deduped.append(rec)
+
+    with output_path.open("w", encoding="utf-8") as fh:
+        for rec in deduped:
+            fh.write(json.dumps(rec) + "\n")
+
+    print(f"Deduplicated output: {len(deduped)} chunks in {output_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
