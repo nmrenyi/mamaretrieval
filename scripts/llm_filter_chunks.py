@@ -10,6 +10,7 @@ Usage:
     python scripts/llm_filter_chunks.py --limit 20       # test run
     python scripts/llm_filter_chunks.py --resume         # continue after interruption
     python scripts/llm_filter_chunks.py --workers 4      # increase concurrency
+    python scripts/llm_filter_chunks.py --no-think       # faster smoke test
 """
 
 from __future__ import annotations
@@ -72,6 +73,12 @@ def _parse_args() -> argparse.Namespace:
                         help="Concurrent Ollama requests. Default 2.")
     parser.add_argument("--timeout", type=int, default=180,
                         help="Per-request timeout in seconds. Default 180.")
+    parser.add_argument("--num-predict", type=int, default=8192,
+                        help="Maximum generated tokens per request. Default 8192.")
+    parser.add_argument("--temperature", type=float, default=0.6,
+                        help="Generation temperature. Defaults to 0.6.")
+    parser.add_argument("--no-think", action="store_true",
+                        help="Disable model thinking for faster smoke tests.")
     return parser.parse_args()
 
 
@@ -102,6 +109,9 @@ def _call_ollama(
     chunk: dict[str, Any],
     model: str,
     timeout: int,
+    num_predict: int,
+    temperature: float,
+    think: bool,
 ) -> dict[str, Any]:
     """Call Ollama and return a result dict with chunk_id, suitable, query, reason."""
     text = chunk.get("text", "").strip()
@@ -119,8 +129,13 @@ def _call_ollama(
             {"role": "user", "content": user_content},
         ],
         "stream": False,
-        "think": True,
-        "options": {"temperature": 0.6, "top_p": 0.95, "num_predict": 8192},
+        "think": think,
+        "format": "json",
+        "options": {
+            "temperature": temperature,
+            "top_p": 0.95,
+            "num_predict": num_predict,
+        },
     }).encode()
 
     req = urllib.request.Request(
@@ -150,13 +165,16 @@ def _process_one(
     chunk: dict[str, Any],
     model: str,
     timeout: int,
+    num_predict: int,
+    temperature: float,
+    think: bool,
     retries: int = 2,
 ) -> dict[str, Any]:
     """Attempt to judge one chunk, retrying on transient errors."""
     last_err: Exception | None = None
     for attempt in range(retries + 1):
         try:
-            return _call_ollama(chunk, model, timeout)
+            return _call_ollama(chunk, model, timeout, num_predict, temperature, think)
         except (json.JSONDecodeError, KeyError) as exc:
             last_err = exc
             # Model returned malformed JSON — skip without retry
@@ -202,7 +220,8 @@ def main() -> int:
 
     print(
         f"Processing {len(todo)} chunks with model={args.model}, "
-        f"workers={args.workers}, timeout={args.timeout}s"
+        f"workers={args.workers}, timeout={args.timeout}s, "
+        f"num_predict={args.num_predict}, think={not args.no_think}"
     )
     print("Output chunks →", output_path)
     print("All judgments →", results_path)
@@ -215,9 +234,9 @@ def main() -> int:
     errors = 0
     start_time = time.monotonic()
 
-    # Append mode so --resume continues correctly
-    results_fh = results_path.open("a", encoding="utf-8")
-    output_fh = output_path.open("a", encoding="utf-8")
+    output_mode = "a" if args.resume else "w"
+    results_fh = results_path.open(output_mode, encoding="utf-8")
+    output_fh = output_path.open(output_mode, encoding="utf-8")
 
     # Build a lookup from chunk_id to full chunk record
     chunk_by_id = {c["chunk_id"]: c for c in chunks}
@@ -262,7 +281,15 @@ def main() -> int:
     try:
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
             futures = {
-                pool.submit(_process_one, chunk, args.model, args.timeout): chunk
+                pool.submit(
+                    _process_one,
+                    chunk,
+                    args.model,
+                    args.timeout,
+                    args.num_predict,
+                    args.temperature,
+                    not args.no_think,
+                ): chunk
                 for chunk in todo
             }
             for future in as_completed(futures):
