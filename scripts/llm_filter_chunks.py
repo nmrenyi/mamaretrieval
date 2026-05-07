@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """LLM-based chunk filter.
 
-For each sampled chunk, asks a local Ollama model to understand the chunk,
-generate a clinical query it can answer, and judge whether the query is
-answerable and clinically useful. Chunks passing both checks are kept.
+For each sampled chunk, asks a local LLM to understand the chunk, generate a
+clinical query it can answer, and judge whether the query is answerable and
+clinically useful. Chunks passing both checks are kept.
 
 Usage:
     python scripts/llm_filter_chunks.py                  # full run
@@ -11,6 +11,7 @@ Usage:
     python scripts/llm_filter_chunks.py --resume         # continue after interruption
     python scripts/llm_filter_chunks.py --workers 4      # increase concurrency
     python scripts/llm_filter_chunks.py --no-think       # faster smoke test
+    python scripts/llm_filter_chunks.py --backend openai --model Qwen/Qwen3.6-27B-FP8
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -29,7 +31,10 @@ from typing import Any
 
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-DEFAULT_MODEL = "qwen3.5:9b"
+OPENAI_BASE_URL = "http://127.0.0.1:8000/v1"
+DEFAULT_OLLAMA_MODEL = "qwen3.5:9b"
+DEFAULT_OPENAI_MODEL = "Qwen/Qwen3.6-27B-FP8"
+DEFAULT_MODEL = DEFAULT_OLLAMA_MODEL
 DEFAULT_INPUT = Path("data/sampled_chunks.jsonl")
 DEFAULT_OUTPUT = Path("data/llm_filtered_chunks.jsonl")
 DEFAULT_RESULTS = Path("data/llm_filter_results.jsonl")
@@ -89,7 +94,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
     parser.add_argument("--results", default=str(DEFAULT_RESULTS),
                         help="JSONL file logging every judgment (used for --resume).")
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--backend", choices=["ollama", "openai"], default="ollama",
+                        help="LLM serving backend. Use openai for vLLM/SGLang.")
+    parser.add_argument("--model", default=None,
+                        help="Model name. Defaults to qwen3.5:9b for Ollama and Qwen/Qwen3.6-27B-FP8 for OpenAI-compatible backends.")
+    parser.add_argument("--ollama-url", default=OLLAMA_URL,
+                        help=f"Ollama chat endpoint. Default {OLLAMA_URL}.")
+    parser.add_argument("--base-url", default=OPENAI_BASE_URL,
+                        help=f"OpenAI-compatible base URL. Default {OPENAI_BASE_URL}.")
+    parser.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY", "EMPTY"),
+                        help="OpenAI-compatible API key. vLLM commonly accepts EMPTY.")
     parser.add_argument("--limit", type=int, default=0,
                         help="Process at most N chunks (0 = all).")
     parser.add_argument("--resume", action="store_true",
@@ -117,7 +131,26 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _load_done_ids(results_path: Path) -> tuple[set[str], int]:
+def _resolve_model(backend: str, model: str | None) -> str:
+    if model:
+        return model
+    if backend == "openai":
+        return DEFAULT_OPENAI_MODEL
+    return DEFAULT_OLLAMA_MODEL
+
+
+def _openai_chat_url(base_url: str) -> str:
+    url = base_url.rstrip("/")
+    if url.endswith("/chat/completions"):
+        return url
+    return f"{url}/chat/completions"
+
+
+def _read_http_error_body(exc: urllib.error.HTTPError) -> str:
+    return exc.read().decode("utf-8", errors="replace").strip()
+
+
+def _load_done_ids(results_path: Path, backend: str, model: str) -> tuple[set[str], int]:
     if not results_path.exists():
         return set(), 0
     done = set()
@@ -127,26 +160,30 @@ def _load_done_ids(results_path: Path) -> tuple[set[str], int]:
             line = line.strip()
             if line:
                 rec = json.loads(line)
-                if _matches_current_result_contract(rec):
+                if _matches_current_result_contract(rec, backend, model):
                     done.add(rec["chunk_id"])
                 else:
                     stale += 1
     return done, stale
 
 
-def _matches_current_result_contract(rec: dict[str, Any]) -> bool:
+def _matches_current_result_contract(rec: dict[str, Any], backend: str, model: str) -> bool:
     return (
         rec.get("llm_filter_schema_version") == RESULT_SCHEMA_VERSION
         and rec.get("llm_filter_prompt_hash") == PROMPT_HASH
+        and rec.get("llm_backend") == backend
+        and rec.get("llm_model") == model
         and "answerable_by_chunk" in rec
         and "clinically_useful" in rec
     )
 
 
-def _matches_current_output_contract(rec: dict[str, Any]) -> bool:
+def _matches_current_output_contract(rec: dict[str, Any], backend: str, model: str) -> bool:
     return (
         rec.get("llm_filter_schema_version") == RESULT_SCHEMA_VERSION
         and rec.get("llm_filter_prompt_hash") == PROMPT_HASH
+        and rec.get("llm_backend") == backend
+        and rec.get("llm_model") == model
         and "seed_query" in rec
         and "llm_answerable_by_chunk" in rec
         and "llm_clinically_useful" in rec
@@ -168,6 +205,7 @@ def _should_keep(result: dict[str, Any]) -> bool:
 def _call_ollama(
     chunk: dict[str, Any],
     model: str,
+    url: str,
     timeout: int,
     num_predict: int,
     temperature: float,
@@ -199,7 +237,7 @@ def _call_ollama(
     }).encode()
 
     req = urllib.request.Request(
-        OLLAMA_URL, data=payload, headers={"Content-Type": "application/json"}
+        url, data=payload, headers={"Content-Type": "application/json"}
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         response = json.loads(resp.read())
@@ -213,6 +251,76 @@ def _call_ollama(
         "chunk_id": chunk["chunk_id"],
         "llm_filter_schema_version": RESULT_SCHEMA_VERSION,
         "llm_filter_prompt_hash": PROMPT_HASH,
+        "llm_backend": "ollama",
+        "llm_model": model,
+        "query": parsed.get("query") or None,
+        "reason": str(parsed.get("reason", "")),
+        "answerable_by_chunk": answerable_by_chunk,
+        "clinically_useful": clinically_useful,
+    }
+
+
+def _call_openai(
+    chunk: dict[str, Any],
+    model: str,
+    base_url: str,
+    api_key: str,
+    timeout: int,
+    num_predict: int,
+    temperature: float,
+    think: bool,
+) -> dict[str, Any]:
+    """Call an OpenAI-compatible chat endpoint such as vLLM."""
+    text = chunk.get("text", "").strip()
+    breadcrumb = chunk.get("breadcrumb", "").strip()
+
+    if breadcrumb:
+        user_content = f"Breadcrumb: {breadcrumb}\n\nChunk:\n{text}"
+    else:
+        user_content = f"Chunk:\n{text}"
+
+    request_payload: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        "temperature": temperature,
+        "top_p": 0.95,
+        "max_tokens": num_predict,
+        "response_format": {"type": "json_object"},
+        "chat_template_kwargs": {"enable_thinking": think},
+    }
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    req = urllib.request.Request(
+        _openai_chat_url(base_url),
+        data=json.dumps(request_payload).encode("utf-8"),
+        headers=headers,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            response = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        detail = _read_http_error_body(exc)
+        raise RuntimeError(
+            f"OpenAI-compatible request failed with HTTP {exc.code}: {detail}"
+        ) from exc
+
+    raw = response["choices"][0]["message"]["content"].strip()
+    parsed = json.loads(raw)
+    answerable_by_chunk = _as_bool(parsed.get("answerable_by_chunk", False))
+    clinically_useful = _as_bool(parsed.get("clinically_useful", False))
+
+    return {
+        "chunk_id": chunk["chunk_id"],
+        "llm_filter_schema_version": RESULT_SCHEMA_VERSION,
+        "llm_filter_prompt_hash": PROMPT_HASH,
+        "llm_backend": "openai",
+        "llm_model": model,
         "query": parsed.get("query") or None,
         "reason": str(parsed.get("reason", "")),
         "answerable_by_chunk": answerable_by_chunk,
@@ -222,7 +330,11 @@ def _call_ollama(
 
 def _process_one(
     chunk: dict[str, Any],
+    backend: str,
     model: str,
+    ollama_url: str,
+    base_url: str,
+    api_key: str,
     timeout: int,
     num_predict: int,
     temperature: float,
@@ -233,7 +345,13 @@ def _process_one(
     last_err: Exception | None = None
     for attempt in range(retries + 1):
         try:
-            return _call_ollama(chunk, model, timeout, num_predict, temperature, think)
+            if backend == "openai":
+                return _call_openai(
+                    chunk, model, base_url, api_key, timeout, num_predict, temperature, think
+                )
+            return _call_ollama(
+                chunk, model, ollama_url, timeout, num_predict, temperature, think
+            )
         except (json.JSONDecodeError, KeyError) as exc:
             last_err = exc
             # Model returned malformed JSON — skip without retry
@@ -247,6 +365,8 @@ def _process_one(
         "chunk_id": chunk["chunk_id"],
         "llm_filter_schema_version": RESULT_SCHEMA_VERSION,
         "llm_filter_prompt_hash": PROMPT_HASH,
+        "llm_backend": backend,
+        "llm_model": model,
         "query": None,
         "reason": f"error: {type(last_err).__name__}",
         "answerable_by_chunk": False,
@@ -256,6 +376,7 @@ def _process_one(
 
 def main() -> int:
     args = _parse_args()
+    model = _resolve_model(args.backend, args.model)
     input_path = Path(args.input)
     output_path = Path(args.output)
     results_path = Path(args.results)
@@ -269,11 +390,11 @@ def main() -> int:
 
     done_ids: set[str] = set()
     if args.resume:
-        done_ids, stale_count = _load_done_ids(results_path)
+        done_ids, stale_count = _load_done_ids(results_path, args.backend, model)
         print(f"Resuming: {len(done_ids)} current-schema chunks already judged, skipping.")
         if stale_count:
             print(
-                f"Ignoring {stale_count} stale judgments from an older prompt/schema."
+                f"Ignoring {stale_count} stale judgments from a different prompt/schema/backend/model."
             )
 
     todo = [c for c in chunks if c["chunk_id"] not in done_ids]
@@ -285,9 +406,9 @@ def main() -> int:
         return 0
 
     print(
-        f"Processing {len(todo)} chunks with model={args.model}, "
+        f"Processing {len(todo)} chunks with backend={args.backend}, model={model}, "
         f"workers={args.workers}, timeout={args.timeout}s, "
-        f"num_predict={args.num_predict}, think={not args.no_think}"
+        f"max_tokens={args.num_predict}, think={not args.no_think}"
     )
     print("Output chunks →", output_path)
     print("All judgments →", results_path)
@@ -324,6 +445,8 @@ def main() -> int:
             out_rec = dict(chunk_rec)
             out_rec["llm_filter_schema_version"] = RESULT_SCHEMA_VERSION
             out_rec["llm_filter_prompt_hash"] = PROMPT_HASH
+            out_rec["llm_backend"] = result["llm_backend"]
+            out_rec["llm_model"] = result["llm_model"]
             out_rec["seed_query"] = result["query"]
             out_rec["llm_answerable_by_chunk"] = result["answerable_by_chunk"]
             out_rec["llm_clinically_useful"] = result["clinically_useful"]
@@ -360,7 +483,11 @@ def main() -> int:
                 pool.submit(
                     _process_one,
                     chunk,
-                    args.model,
+                    args.backend,
+                    model,
+                    args.ollama_url,
+                    args.base_url,
+                    args.api_key,
                     args.timeout,
                     args.num_predict,
                     args.temperature,
@@ -394,7 +521,7 @@ def main() -> int:
             if not line:
                 continue
             rec = json.loads(line)
-            if not _matches_current_output_contract(rec):
+            if not _matches_current_output_contract(rec, args.backend, model):
                 continue
             if rec["chunk_id"] not in seen:
                 seen.add(rec["chunk_id"])
