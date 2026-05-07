@@ -13,7 +13,7 @@ from mamaretrieval.corpus import CorpusChunk
 
 
 ROOT_SECTION = "__root__"
-MIN_BODY_CHARS = 100
+MIN_BODY_CHARS = 150
 
 
 FRONT_MATTER_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -50,8 +50,15 @@ BOILERPLATE_HEADINGS = {
     "how to use this book",
     "facilitator's schedule and preparation activities",
     "reflection on the trigger scenario",
+    "reflection on trigger scenario",
     "web resources for clinicians",
     "web resources",
+    "role play",
+    "role-play",
+    "simulated practice",
+    "notices",
+    "follow-up activities",
+    "planning follow-up",
 }
 
 STRUCTURAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -72,6 +79,36 @@ STRUCTURAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "reflection_trigger",
         re.compile(r"\breflection on the trigger scenario\b", re.IGNORECASE),
+    ),
+    (
+        "educator_instruction",
+        re.compile(
+            r"\bask (?:(?:the|a|one|each|for) )?(?:students?|learners?)\b"
+            r"|\basking (?:students?|learners?)\b"
+            r"|\binvite.*\blearners?\b"
+            r"|\bfollow.?up meeting\b"
+            r"|\bsimulated practice\b"
+            r"|\brole.?play\b"
+            r"|\bdiscussion groups?\b.*\bconsider\b"
+            r"|\bwrite.*on the blackboard\b"
+            r"|\bfacilitator.*\brotates?\b"
+            r"|\bshow slide\b"
+            r"|\bfacilitators?\s+explain\b"
+            r"|\bremind students\b",
+            re.IGNORECASE,
+        ),
+    ),
+)
+
+FULL_BODY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "scenario_reflection",
+        re.compile(
+            r"\bquestions that (?:arise|could be asked|may be asked|need to be addressed|could arise)\b"
+            r"|\bin order to confirm that a student is competent\b"
+            r"|\b(?:this|the) module begins with\b",
+            re.IGNORECASE,
+        ),
     ),
 )
 
@@ -169,6 +206,10 @@ def boilerplate_reason(chunk: CorpusChunk) -> str | None:
 
     for reason, pattern in STRUCTURAL_PATTERNS:
         if pattern.search(leading_text) or pattern.search(chunk.breadcrumb):
+            return reason
+
+    for reason, pattern in FULL_BODY_PATTERNS:
+        if pattern.search(text):
             return reason
 
     if _is_glossary_fragment(text):
