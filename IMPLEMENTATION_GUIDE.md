@@ -81,7 +81,7 @@ queries:
   target_total: 3000
   questions_per_chunk: 2        # default; range 2-3
   synthesis_questions: true     # generate cross-chunk synthesis questions
-  adversarial_fraction: 0.15    # fraction of questions rephrased with abbreviations
+  adversarial_fraction: 0.15    # fraction of questions with robustness reformulations
 
 # Source tier assignments and query targets.
 # Only sources listed in ~/Downloads/mamai-medical-guidelines/source-research/rag-source-evaluation.md
@@ -170,14 +170,28 @@ One JSON object per line. Output of `generate_queries.py`.
   "seed_chunk_id": "dcaeb591065c7c22",
   "source": "msf-essential-obstetric-and-newborn-care",
   "tier": "very_high",
-  "query_type": "per_chunk"
+  "query_type": "per_chunk",
+  "adversarial_type": null
 }
 ```
 
 `query_type` is one of:
 - `per_chunk` — standard question answerable by the seed chunk
 - `synthesis` — question spanning multiple chunks on the same clinical topic
-- `adversarial` — per_chunk question rephrased with clinical abbreviations
+- `adversarial` — additive robustness-oriented reformulation of a per_chunk
+  question
+
+`adversarial_type` is null for non-adversarial queries. For adversarial queries,
+it identifies the stress scenario:
+
+- `abbreviation`
+- `typo`
+- `lay_synonym`
+- `redundant_context`
+- `ambiguous`
+- `multi_condition`
+- `negation`
+- `rare_exact`
 
 ### `data/candidates.jsonl`
 One JSON object per query. Output of `pool_candidates.py`.
@@ -387,9 +401,22 @@ For seed_chunk_ids, list the chunk IDs whose combination is needed.
 For synthesis questions, set `seed_chunk_id` to the first of the `seed_chunk_ids` in the output schema (primary seed), and `query_type` to `synthesis`.
 
 #### Adversarial reformulations
-After generating per-chunk questions, select `adversarial_fraction` (default 15%) randomly. For each selected question, call the LLM to rephrase using clinical abbreviations.
+After generating per-chunk questions, select up to `adversarial_fraction` (default 15%) for robustness-oriented reformulation. Keep the original per-chunk question and add each reformulation as a separate query record; the final query count may exceed `queries.target_total`.
 
-User prompt:
+Research-backed retrieval stress scenarios to cover:
+
+- `abbreviation`: common clinical shorthand. Examples of eligible terms include postpartum haemorrhage/hemorrhage (PPH), magnesium sulphate/sulfate (MgSO4), blood pressure (BP), intravenous (IV), intramuscular (IM), prevention of mother-to-child transmission (PMTCT), antenatal care (ANC), caesarean/cesarean section (CS), fetal heart rate (FHR), and last menstrual period (LMP). Do not force abbreviations into questions where clinicians would not normally use shorthand.
+- `typo`: realistic spelling or keyboard mistakes that preserve the clinical intent.
+- `lay_synonym`: colloquial patient-facing wording instead of professional medical terminology, e.g. "bleeding too much after birth" for postpartum haemorrhage.
+- `redundant_context`: extra bedside narrative around the actual information need.
+- `ambiguous`: underspecified wording that still points to the same likely clinical topic.
+- `multi_condition`: multiple constraints in one query, such as condition plus risk factor, contraindication, or patient state.
+- `negation`: "avoid", "do not", contraindication, or absence-of-symptom wording.
+- `rare_exact`: drug names, doses, measurements, procedures, or rare salient terms where exact matching matters.
+
+Skip the adversarial record if the model output changes the clinical intent, is unchanged, is less clear, or sounds clinically unnatural.
+
+Abbreviation prompt:
 ```
 Rephrase the following clinical question to use common abbreviations and
 shorthand as a nurse would use them (e.g. PPH instead of postpartum haemorrhage,
@@ -402,7 +429,22 @@ Original: {question}
 Return only the rephrased question string.
 ```
 
-Set `query_type` to `adversarial` and retain the original `seed_chunk_id`.
+Use similarly constrained prompts for the other `adversarial_type` values. Set
+`query_type` to `adversarial`, set `adversarial_type`, and retain the original
+`seed_chunk_id`.
+
+Do not include corpus poisoning or prompt injection in Stage 4 query generation.
+Those belong in a later security/robustness audit because this benchmark uses a
+fixed curated guideline corpus.
+
+Research basis:
+
+- Query-level RAG robustness work reports degradation under minor query variations such as typos, redundancy, formality changes, and ambiguity: https://aclanthology.org/2025.gem-1.38/
+- Query-variation robustness work shows modern retrieval transformers can remain sensitive to typos and paraphrases: https://aclanthology.org/2024.findings-emnlp.248/
+- Multi-condition IR work reports degradation as query complexity and condition count increase: https://aclanthology.org/2025.findings-emnlp.726/
+- Medical retrieval work highlights domain-specific vocabulary, abbreviations, informal terminology, and negation as important clinical retrieval issues: https://www.nist.gov/publications/trec-medical-records-track
+- Dense retrieval work highlights weaknesses around rare entities and salient phrase matching: https://aclanthology.org/2022.findings-emnlp.19/
+- Medical search work highlights layperson/professional vocabulary gaps: https://link.springer.com/article/10.1007/s10791-015-9258-y
 
 **Implementation notes:**
 - Use `openai` client with model from `config.yaml` (`gpt-4o-mini` for generation).
@@ -548,7 +590,7 @@ The `releases/mamaretrieval-v1/` directory is the artifact consumed by the evalu
 
 ## 10. Key design decisions (rationale)
 
-**No hand-written queries.** Hand-written queries were considered but skipped for resource reasons. Three mitigations are applied in the generation prompt: synthesis questions (cross-chunk), nurse voice (realistic phrasing), adversarial reformulations (abbreviations). See `~/Downloads/mamai-mamabench-docs/mamaretrieval.md` for full rationale. Residual caveat: dense-retriever scores may be optimistic; lead with MRR and Hit Rate rather than Recall@k.
+**No hand-written queries.** Hand-written queries were considered but skipped for resource reasons. Three mitigations are applied in the generation prompt: synthesis questions (cross-chunk), nurse voice (realistic phrasing), and adversarial reformulations covering abbreviations, typos, lay terminology, redundant context, ambiguity, multi-condition queries, negation, and rare exact terms. See `~/Downloads/mamai-mamabench-docs/mamaretrieval.md` for full rationale. Residual caveat: dense-retriever scores may be optimistic; lead with MRR and Hit Rate rather than Recall@k.
 
 **Sampling only from rag-source-evaluation.md included sources.** The corpus contains 87 source PDFs but only 19 are sampled. Sources not covered by `~/Downloads/mamai-medical-guidelines/source-research/rag-source-evaluation.md` (including the core WHO/NICE/Tanzania clinical guidelines) are excluded from query generation for now. This keeps the benchmark focused on sources with explicit relevance ratings.
 
