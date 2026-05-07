@@ -19,6 +19,8 @@ env/
 
 # Generated benchmark data
 data/*.jsonl
+data/*thinking_example*.json
+data/*thinking_example*.txt
 data/audit/*.jsonl
 data/audit/*.md
 data/audit/query_ids.txt
@@ -39,4 +41,3 @@ build/
 
 # macOS
 .DS_Store
-
