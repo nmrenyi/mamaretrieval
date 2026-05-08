@@ -81,11 +81,40 @@ Return exactly one JSON object — no prose, no markdown fences:
 {"query": null, "reason": "<≤30 words>"}"""
 
 RESULT_SCHEMA_VERSION = "query-reason-v1"
-# Bump this string whenever _build_user_content changes, so --resume rejects
-# results generated with a different user-message template.
-_INPUT_TEMPLATE_VERSION = "user-source-page-v1"
+
+
+def _build_user_content(chunk: dict[str, Any]) -> str:
+    """Build the user message from a chunk record, including source, page, and breadcrumb when present."""
+    text = chunk.get("text", "").strip()
+    breadcrumb = chunk.get("breadcrumb", "").strip()
+    source = chunk.get("source", "").strip()
+    page = chunk.get("page")
+
+    header_lines: list[str] = []
+    if source:
+        header_lines.append(f"Source: {source}")
+    if page is not None:
+        header_lines.append(f"Page: {page}")
+    if breadcrumb:
+        header_lines.append(f"Breadcrumb: {breadcrumb}")
+
+    header = "\n".join(header_lines)
+    if header:
+        return f"{header}\n\nChunk:\n{text}"
+    return f"Chunk:\n{text}"
+
+
+# Hash covers both the system prompt and the rendered user message template so
+# that any change to either automatically invalidates --resume results.
+_SENTINEL_CHUNK: dict[str, Any] = {
+    "chunk_id": "0000000000000000",
+    "source": "__sentinel__",
+    "page": 0,
+    "breadcrumb": "Sentinel > Section",
+    "text": "Sentinel chunk text.",
+}
 PROMPT_HASH = hashlib.sha256(
-    (SYSTEM_PROMPT + "\x00" + _INPUT_TEMPLATE_VERSION).encode("utf-8")
+    (SYSTEM_PROMPT + "\x00" + _build_user_content(_SENTINEL_CHUNK)).encode("utf-8")
 ).hexdigest()[:16]
 
 
@@ -149,27 +178,6 @@ def _openai_chat_url(base_url: str) -> str:
     if url.endswith("/chat/completions"):
         return url
     return f"{url}/chat/completions"
-
-
-def _build_user_content(chunk: dict[str, Any]) -> str:
-    """Build the user message from a chunk record, including source, page, and breadcrumb when present."""
-    text = chunk.get("text", "").strip()
-    breadcrumb = chunk.get("breadcrumb", "").strip()
-    source = chunk.get("source", "").strip()
-    page = chunk.get("page")
-
-    header_lines: list[str] = []
-    if source:
-        header_lines.append(f"Source: {source}")
-    if page is not None:
-        header_lines.append(f"Page: {page}")
-    if breadcrumb:
-        header_lines.append(f"Breadcrumb: {breadcrumb}")
-
-    header = "\n".join(header_lines)
-    if header:
-        return f"{header}\n\nChunk:\n{text}"
-    return f"Chunk:\n{text}"
 
 
 def _read_http_error_body(exc: urllib.error.HTTPError) -> str:
