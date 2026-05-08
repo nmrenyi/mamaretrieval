@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import random
 import sys
@@ -164,6 +165,10 @@ def _parse_args() -> argparse.Namespace:
                         help="Shuffle chunks before processing. Use with --limit for diverse test runs across sources.")
     parser.add_argument("--shuffle-seed", type=int, default=42,
                         help="Random seed for --shuffle. Default 42.")
+    parser.add_argument("--shard", type=int, nargs=2, metavar=("INDEX", "COUNT"),
+                        help="Process shard INDEX (0-based) of COUNT equal parts. "
+                             "Use with --shuffle so each shard is source-diverse. "
+                             "Point --output and --results at shard-specific paths.")
     return parser.parse_args()
 
 
@@ -413,6 +418,16 @@ def main() -> int:
     if args.shuffle:
         random.Random(args.shuffle_seed).shuffle(chunks)
         print(f"Shuffled with seed={args.shuffle_seed}")
+
+    if args.shard is not None:
+        shard_idx, shard_count = args.shard
+        if not (0 <= shard_idx < shard_count):
+            print(f"Invalid shard: INDEX={shard_idx} must be in 0..{shard_count-1}", file=sys.stderr)
+            return 1
+        shard_size = math.ceil(len(chunks) / shard_count)
+        start = shard_idx * shard_size
+        chunks = chunks[start: start + shard_size]
+        print(f"Shard {shard_idx}/{shard_count}: {len(chunks)} chunks (indices {start}–{start + len(chunks) - 1})")
 
     done_ids: set[str] = set()
     if args.resume:
