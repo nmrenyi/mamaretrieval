@@ -184,8 +184,8 @@ def build_octen_corpus_embeddings(
 
     from sentence_transformers import SentenceTransformer
 
-    print("  Encoding corpus with lightonai/Octen-Embedding-8B...", flush=True)
-    model = SentenceTransformer("lightonai/Octen-Embedding-8B", device=device)
+    print("  Encoding corpus with Octen/Octen-Embedding-8B...", flush=True)
+    model = SentenceTransformer("Octen/Octen-Embedding-8B", device=device)
 
     texts = [c["text"] for c in chunks]
     embs = model.encode(
@@ -208,7 +208,7 @@ def encode_octen_queries(
 ) -> np.ndarray:
     from sentence_transformers import SentenceTransformer
 
-    model = SentenceTransformer("lightonai/Octen-Embedding-8B", device=device)
+    model = SentenceTransformer("Octen/Octen-Embedding-8B", device=device)
     embs = model.encode(
         queries,
         batch_size=batch_size,
