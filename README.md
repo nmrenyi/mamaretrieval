@@ -145,6 +145,52 @@ dropped from future sampling runs.
 
 ---
 
+## Phase 2a — Retriever Selection Rationale
+
+The goal of Phase 2a is to build a **high-recall candidate pool** for each query. Every relevant chunk that the retrievers miss at this stage is silently lost — the LLM judge in Phase 2b never sees it. Maximising recall here is therefore more important than precision.
+
+### Evidence base
+
+We evaluated retriever choices against two benchmarks:
+
+- **BEIR** (Thakur et al. 2021, NeurIPS) — 18 heterogeneous zero-shot retrieval datasets. Key finding from the paper: BM25 is a surprisingly strong zero-shot baseline; most dense models from 2021 (DPR −47.7%, ANCE −7.4%) underperform it. Re-ranking (BM25+CE, +11%) and late interaction (ColBERT, +2.5%) are the only approaches that consistently beat BM25.
+- **RTEB English (beta)** — a newer retrieval benchmark covering legal, finance, code, and healthcare domains. Top open-source performers: Octen-Embedding-8B (81.17), Qwen3-Embedding-8B (73.88).
+
+### Why each retriever was chosen
+
+**BM25** — the zero-shot lexical baseline. Indispensable for exact-match recall: drug names, specific doses, procedure names, rare clinical terms. BEIR shows it outperforms most neural models in zero-shot settings. Fast and requires no GPU.
+
+**MedCPT** — a bi-encoder trained on 255M biomedical query–article pairs from PubMed (Jin et al., NIH/NLM). Not on general leaderboards (domain-specific), but the best domain fit for a midwifery/obstetric clinical guidelines corpus. Captures biomedical vocabulary, abbreviations, and clinical framing that general-purpose models may miss.
+
+**Octen-Embedding-8B** — the strongest open-source dense retriever on RTEB English (81.17). General-purpose, deployable on the cluster. Covers semantic matching and paraphrases that BM25 and MedCPT may miss.
+
+**RRF (Reciprocal Rank Fusion)** — a parameter-free mathematical combination of the ranked lists from BM25, MedCPT, and Octen. Adds no new candidates but surfaces chunks that appeared in multiple retrievers' top-k near the top of the fused list, improving overall recall at no indexing cost.
+
+### Why certain retrievers were deferred to Phase 3
+
+**voyage-4-large** (78.14 RTEB) — top-ranked overall but API-only (Voyage AI). Not deployable locally. Reserved for the Phase 3 exhaustive audit where 30 queries are labelled with maximum-recall pools.
+
+**BGE-reranker / BM25+CE** — re-rankers improve precision, not recall. They are the right tool for Phase 3 where we want the most accurate labels on the 30-query gold subset, not for Phase 2a where recall is the priority.
+
+**LateOn** (lightonai, ColBERT-style, 57.22 BEIR) — late-interaction model with architectural diversity (MaxSim vs. cosine). Scored below Octen-Embedding-8B on the shared benchmark dimension we could compare. Requires a separate library (`pylate`/PLAID index) adding implementation complexity. Retained as a Phase 3 option for architectural diversity in the exhaustive pool.
+
+### Phase 2a retriever set
+
+| Retriever | Type | Purpose |
+|-----------|------|---------|
+| BM25 | Sparse lexical | Exact term recall |
+| MedCPT | Medical dense bi-encoder | Biomedical domain recall |
+| Octen-Embedding-8B | General dense bi-encoder | Semantic recall |
+| RRF (BM25 + MedCPT + Octen) | Hybrid fusion | Combined recall |
+
+### Phase 3 audit additions
+
+voyage-4-large (API, best overall), BGE-reranker (cross-encoder re-ranking), LateOn (late-interaction diversity), top-20 per retriever instead of top-10.
+
+Full candidate evaluation with scores and reasoning for all considered retrievers: https://github.com/nmrenyi/mamaretrieval/issues/6
+
+---
+
 ## Corpus Contract
 
 The expected corpus is the `rag-bundle-v0.2.0` guideline bundle:
