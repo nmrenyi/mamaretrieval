@@ -3,7 +3,7 @@ corpus:
   release_manifest_path: ~/Downloads/mamai-medical-guidelines/releases/rag-bundle-v0.2.0/manifest.json
 
 queries:
-  target_total: 3000
+  target_total: 5000
   questions_per_chunk: 1
   synthesis_questions: true
   adversarial_fraction: 0.15
@@ -11,13 +11,13 @@ queries:
 
 source_tiers:
   very_high:
-    queries_per_source: 300
+    queries_per_source: 520
     sources:
       - hesperian-a-book-for-midwives
       - msf-essential-obstetric-and-newborn-care
       - midwifery-essentials-6
   high:
-    queries_per_source: 165
+    queries_per_source: 285
     sources:
       - oxford-handbook-of-midwifery
       - skills-for-midwifery-practice
@@ -28,11 +28,11 @@ source_tiers:
       - who-midwifery-education-modules-6
       - who-platform-malta-guide-for-midwifery-skills
   moderate_high:
-    queries_per_source: 130
+    queries_per_source: 225
     sources:
       - midwifery-essentials-3
   moderate:
-    queries_per_source: 100
+    queries_per_source: 173
     sources:
       - clinical-practice-guidelines-midwifery-womens-health
       - midwifery-essentials-2
@@ -41,7 +41,7 @@ source_tiers:
       - nmc-midwifery-marking-criteria
       - icm-essential-competencies-for-midwifery-practice
   low_moderate:
-    queries_per_source: 65
+    queries_per_source: 113
     sources:
       - nmc-midwifery-mock-osce
 
