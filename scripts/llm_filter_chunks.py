@@ -28,7 +28,7 @@ import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Any, TypedDict
 
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
@@ -80,7 +80,19 @@ Return exactly one JSON object — no prose, no markdown fences:
 {"query": "<question ≤20 words>", "reason": "<≤30 words>"}
 {"query": null, "reason": "<≤30 words>"}"""
 
-RESULT_SCHEMA_VERSION = "query-reason-v1"
+class FilterResult(TypedDict):
+    chunk_id: str
+    llm_filter_schema_version: str
+    llm_filter_prompt_hash: str
+    llm_backend: str
+    llm_model: str
+    query: str | None
+    reason: str
+
+
+RESULT_SCHEMA_VERSION = "v-" + hashlib.sha256(
+    "\x00".join(sorted(FilterResult.__annotations__)).encode()
+).hexdigest()[:8]
 
 
 def _build_user_content(chunk: dict[str, Any]) -> str:
@@ -220,8 +232,18 @@ def _matches_current_output_contract(rec: dict[str, Any], backend: str, model: s
     )
 
 
-def _should_keep(result: dict[str, Any]) -> bool:
-    return result.get("query") is not None
+def _should_keep(result: FilterResult) -> bool:
+    return result["query"] is not None
+
+
+def _validate_result(result: dict[str, Any]) -> FilterResult:
+    expected = set(FilterResult.__annotations__)
+    actual = set(result.keys())
+    missing = expected - actual
+    extra = actual - expected
+    if missing or extra:
+        raise ValueError(f"FilterResult schema mismatch — missing: {missing}, extra: {extra}")
+    return result  # type: ignore[return-value]
 
 
 def _call_ollama(
@@ -232,7 +254,7 @@ def _call_ollama(
     num_predict: int,
     temperature: float,
     think: bool,
-) -> dict[str, Any]:
+) -> FilterResult:
     """Call Ollama and return the clinical relevance judgment and query."""
     user_content = _build_user_content(chunk)
 
@@ -261,7 +283,7 @@ def _call_ollama(
     raw = response["message"]["content"].strip()
     parsed = json.loads(raw)
 
-    return {
+    return _validate_result({
         "chunk_id": chunk["chunk_id"],
         "llm_filter_schema_version": RESULT_SCHEMA_VERSION,
         "llm_filter_prompt_hash": PROMPT_HASH,
@@ -269,7 +291,7 @@ def _call_ollama(
         "llm_model": model,
         "query": parsed.get("query") or None,
         "reason": str(parsed.get("reason", "")),
-    }
+    })
 
 
 def _call_openai(
@@ -281,7 +303,7 @@ def _call_openai(
     num_predict: int,
     temperature: float,
     think: bool,
-) -> dict[str, Any]:
+) -> FilterResult:
     """Call an OpenAI-compatible chat endpoint such as vLLM."""
     user_content = _build_user_content(chunk)
 
@@ -319,7 +341,7 @@ def _call_openai(
     raw = response["choices"][0]["message"]["content"].strip()
     parsed = json.loads(raw)
 
-    return {
+    return _validate_result({
         "chunk_id": chunk["chunk_id"],
         "llm_filter_schema_version": RESULT_SCHEMA_VERSION,
         "llm_filter_prompt_hash": PROMPT_HASH,
@@ -327,7 +349,7 @@ def _call_openai(
         "llm_model": model,
         "query": parsed.get("query") or None,
         "reason": str(parsed.get("reason", "")),
-    }
+    })
 
 
 def _process_one(
@@ -342,7 +364,7 @@ def _process_one(
     temperature: float,
     think: bool,
     retries: int = 2,
-) -> dict[str, Any]:
+) -> FilterResult:
     """Attempt to judge one chunk, retrying on transient errors."""
     last_err: Exception | None = None
     for attempt in range(retries + 1):
@@ -363,7 +385,7 @@ def _process_one(
             if attempt < retries:
                 time.sleep(2 ** attempt)
 
-    return {
+    return _validate_result({
         "chunk_id": chunk["chunk_id"],
         "llm_filter_schema_version": RESULT_SCHEMA_VERSION,
         "llm_filter_prompt_hash": PROMPT_HASH,
@@ -371,7 +393,7 @@ def _process_one(
         "llm_model": model,
         "query": None,
         "reason": f"error: {type(last_err).__name__}",
-    }
+    })
 
 
 def main() -> int:
