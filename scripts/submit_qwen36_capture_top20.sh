@@ -15,23 +15,32 @@ MAX_NUM_SEQS="${MAX_NUM_SEQS:-128}"
 MAX_TOKENS="${MAX_TOKENS:-16384}"
 GDN_PREFILL_BACKEND="${GDN_PREFILL_BACKEND:-triton}"
 CAPTURE_LINES="${CAPTURE_LINES:-20}"
+CAPTURE_INPUT="${CAPTURE_INPUT:-data/sampled_chunks.jsonl}"
+CAPTURE_LABEL="${CAPTURE_LABEL:-top${CAPTURE_LINES}}"
 
 LOCAL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVER_ROOT="$SERVER:$SERVER_SCRATCH"
 
-if [[ ! -f "$LOCAL_ROOT/data/sampled_chunks.jsonl" ]]; then
-  echo "ERROR: data/sampled_chunks.jsonl not found. Run scripts/sample_chunks.py first." >&2
+case "$CAPTURE_INPUT" in
+  /*)
+    echo "ERROR: CAPTURE_INPUT must be relative to the repository root." >&2
+    exit 1
+    ;;
+esac
+
+if [[ ! -f "$LOCAL_ROOT/$CAPTURE_INPUT" ]]; then
+  echo "ERROR: $CAPTURE_INPUT not found." >&2
   exit 1
 fi
 
 echo "Preparing cluster workspace..."
-ssh "$SERVER" "mkdir -p '$SERVER_SCRATCH/scripts' '$SERVER_SCRATCH/data' '$SERVER_SCRATCH/logs'"
+ssh "$SERVER" "mkdir -p '$SERVER_SCRATCH/scripts' '$SERVER_SCRATCH/data' '$SERVER_SCRATCH/logs' '$SERVER_SCRATCH/$(dirname "$CAPTURE_INPUT")'"
 
-echo "Syncing scripts and sampled chunks..."
+echo "Syncing scripts and capture input..."
 rsync -av --delete \
   --exclude="__pycache__/" \
   "$LOCAL_ROOT/scripts/" "$SERVER_ROOT/scripts/"
-rsync -av "$LOCAL_ROOT/data/sampled_chunks.jsonl" "$SERVER_ROOT/data/sampled_chunks.jsonl"
+rsync -av "$LOCAL_ROOT/$CAPTURE_INPUT" "$SERVER_ROOT/$CAPTURE_INPUT"
 
 ssh "$SERVER" "runai delete job '$JOB_NAME' --project '$PROJECT' >/dev/null 2>&1 || true"
 
@@ -54,6 +63,8 @@ ssh "$SERVER" runai submit "$JOB_NAME" \
   -e MAX_TOKENS="$MAX_TOKENS" \
   -e GDN_PREFILL_BACKEND="$GDN_PREFILL_BACKEND" \
   -e CAPTURE_LINES="$CAPTURE_LINES" \
+  -e CAPTURE_INPUT="$CAPTURE_INPUT" \
+  -e CAPTURE_LABEL="$CAPTURE_LABEL" \
   -e HF_HOME="$REPO_DIR/hf_cache" \
   -e PYTHONUSERBASE="$REPO_DIR/python_user" \
   -e RUNAI_HOME="$REPO_DIR/runai_home" \
@@ -64,4 +75,4 @@ echo "Job submitted. Monitor with:"
 echo "  ssh $SERVER 'runai logs $JOB_NAME -f --project $PROJECT'"
 echo
 echo "Copy results after completion with:"
-echo "  rsync -av $SERVER_ROOT/data/qwen36_27b_fp8_top${CAPTURE_LINES}_thinking_*/ data/"
+echo "  rsync -av $SERVER_ROOT/data/qwen36_27b_fp8_${CAPTURE_LABEL}_thinking_*/ data/"

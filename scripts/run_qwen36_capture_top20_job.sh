@@ -11,6 +11,8 @@ MAX_TOKENS="${MAX_TOKENS:-16384}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
 GDN_PREFILL_BACKEND="${GDN_PREFILL_BACKEND:-triton}"
 CAPTURE_LINES="${CAPTURE_LINES:-20}"
+CAPTURE_INPUT="${CAPTURE_INPUT:-data/sampled_chunks.jsonl}"
+CAPTURE_LABEL="${CAPTURE_LABEL:-top${CAPTURE_LINES}}"
 OUTPUT_DIR="${OUTPUT_DIR:-}"
 
 export HOME="${RUNAI_HOME:-$REPO_DIR/runai_home}"
@@ -87,7 +89,7 @@ urllib.request.urlopen("http://127.0.0.1:8000/v1/models", timeout=5).read()
 PY
 
 if [[ -z "$OUTPUT_DIR" ]]; then
-  OUTPUT_DIR="data/qwen36_27b_fp8_top${CAPTURE_LINES}_thinking_$(date +%Y%m%d_%H%M%S)"
+  OUTPUT_DIR="data/qwen36_27b_fp8_${CAPTURE_LABEL}_thinking_$(date +%Y%m%d_%H%M%S)"
 fi
 mkdir -p "$OUTPUT_DIR"
 
@@ -101,7 +103,7 @@ for line in $(seq 1 "$CAPTURE_LINES"); do
     --base-url http://127.0.0.1:8000/v1 \
     --api-key EMPTY \
     --model "$MODEL" \
-    --input data/sampled_chunks.jsonl \
+    --input "$CAPTURE_INPUT" \
     --chunk-line "$line" \
     --output-prefix "$OUTPUT_DIR/line_${padded}" \
     --num-predict "$MAX_TOKENS" \
