@@ -19,6 +19,7 @@ env/
 
 # Generated benchmark data
 data/*.jsonl
+data/queries_review.txt
 data/*thinking_example*.json
 data/*thinking_example*.txt
 data/*thinking*/
