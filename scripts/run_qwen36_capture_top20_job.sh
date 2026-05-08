@@ -10,6 +10,7 @@ MAX_NUM_SEQS="${MAX_NUM_SEQS:-128}"
 MAX_TOKENS="${MAX_TOKENS:-16384}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
 GDN_PREFILL_BACKEND="${GDN_PREFILL_BACKEND:-triton}"
+CAPTURE_LINES="${CAPTURE_LINES:-20}"
 OUTPUT_DIR="${OUTPUT_DIR:-}"
 
 export HOME="${RUNAI_HOME:-$REPO_DIR/runai_home}"
@@ -86,13 +87,13 @@ urllib.request.urlopen("http://127.0.0.1:8000/v1/models", timeout=5).read()
 PY
 
 if [[ -z "$OUTPUT_DIR" ]]; then
-  OUTPUT_DIR="data/qwen36_27b_fp8_top20_thinking_$(date +%Y%m%d_%H%M%S)"
+  OUTPUT_DIR="data/qwen36_27b_fp8_top${CAPTURE_LINES}_thinking_$(date +%Y%m%d_%H%M%S)"
 fi
 mkdir -p "$OUTPUT_DIR"
 
 FAILED=0
 FAILED_COUNT=0
-for line in $(seq 1 20); do
+for line in $(seq 1 "$CAPTURE_LINES"); do
   printf -v padded "%02d" "$line"
   echo "Capturing chunk line $line..."
   if ! python3 scripts/capture_qwen_thinking_example.py \

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Submit a Qwen3.6-27B-FP8 vLLM thinking-capture job for the first 20 sampled chunks.
+# Submit a Qwen3.6-27B-FP8 vLLM thinking-capture job for sampled chunks.
 
 set -euo pipefail
 
@@ -14,6 +14,7 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-128}"
 MAX_TOKENS="${MAX_TOKENS:-16384}"
 GDN_PREFILL_BACKEND="${GDN_PREFILL_BACKEND:-triton}"
+CAPTURE_LINES="${CAPTURE_LINES:-20}"
 
 LOCAL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVER_ROOT="$SERVER:$SERVER_SCRATCH"
@@ -52,6 +53,7 @@ ssh "$SERVER" runai submit "$JOB_NAME" \
   -e MAX_NUM_SEQS="$MAX_NUM_SEQS" \
   -e MAX_TOKENS="$MAX_TOKENS" \
   -e GDN_PREFILL_BACKEND="$GDN_PREFILL_BACKEND" \
+  -e CAPTURE_LINES="$CAPTURE_LINES" \
   -e HF_HOME="$REPO_DIR/hf_cache" \
   -e PYTHONUSERBASE="$REPO_DIR/python_user" \
   -e RUNAI_HOME="$REPO_DIR/runai_home" \
@@ -62,4 +64,4 @@ echo "Job submitted. Monitor with:"
 echo "  ssh $SERVER 'runai logs $JOB_NAME -f --project $PROJECT'"
 echo
 echo "Copy results after completion with:"
-echo "  rsync -av $SERVER_ROOT/data/qwen36_27b_fp8_top20_thinking_*/ data/"
+echo "  rsync -av $SERVER_ROOT/data/qwen36_27b_fp8_top${CAPTURE_LINES}_thinking_*/ data/"
