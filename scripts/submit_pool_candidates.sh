@@ -3,9 +3,11 @@
 #
 # Phase 2a retriever set: BM25 + MedCPT + Octen-Embedding-8B
 # Each shard processes 1/SHARD_COUNT of the 3,185 queries.
-# Corpus embeddings are cached in CACHE_DIR — all shards share the same cache.
+# Corpus embeddings are written to CACHE_DIR on the scratch PVC and shared
+# across shards (whichever shard builds them first, the rest load from cache).
 #
-# After all jobs complete, merge outputs:
+# After all jobs complete, sync and merge:
+#   rsync -av light:/mnt/light/scratch/users/yiren/mamaretrieval/data/candidates_shard*.jsonl data/
 #   cat data/candidates_shard{0..4}.jsonl > data/candidates.jsonl
 
 set -euo pipefail
@@ -16,6 +18,7 @@ PROJECT="${PROJECT:-light-yiren}"
 SERVER="${SERVER:-light}"
 SERVER_SCRATCH="${SERVER_SCRATCH:-/mnt/light/scratch/users/yiren/mamaretrieval}"
 REPO_DIR="${REPO_DIR:-/lightscratch/users/yiren/mamaretrieval}"
+CORPUS_PATH="${CORPUS_PATH:-/lightscratch/users/yiren/mamai-medical-guidelines/processed/chunks_for_rag.txt}"
 SHARD_COUNT="${SHARD_COUNT:-5}"
 RETRIEVERS="${RETRIEVERS:-bm25,medcpt,octen}"
 TOP_K="${TOP_K:-10}"
@@ -31,14 +34,12 @@ if [[ ! -f "$LOCAL_ROOT/data/queries.jsonl" ]]; then
   exit 1
 fi
 
-echo "Syncing scripts and queries to cluster..."
+echo "Syncing repo to cluster..."
 ssh "$SERVER" "mkdir -p '$SERVER_SCRATCH/scripts' '$SERVER_SCRATCH/data' '$SERVER_SCRATCH/logs'"
 rsync -av --delete \
   --exclude="__pycache__/" \
   "$LOCAL_ROOT/scripts/" "$SERVER_ROOT/scripts/"
-rsync -av --delete \
-  --exclude="__pycache__/" \
-  "$LOCAL_ROOT/mamaretrieval/" "$SERVER_ROOT/mamaretrieval/" 2>/dev/null || true
+rsync -av "$LOCAL_ROOT/config.yaml" "$SERVER_ROOT/config.yaml"
 rsync -av "$LOCAL_ROOT/data/queries.jsonl" "$SERVER_ROOT/data/queries.jsonl"
 
 echo "Submitting $SHARD_COUNT shard jobs..."
@@ -57,6 +58,7 @@ for shard in $(seq 0 $((SHARD_COUNT - 1))); do
     --run-as-uid 296712 \
     --run-as-gid 84257 \
     -e REPO_DIR="$REPO_DIR" \
+    -e CORPUS_PATH="$CORPUS_PATH" \
     -e SHARD_INDEX="$shard" \
     -e SHARD_COUNT="$SHARD_COUNT" \
     -e RETRIEVERS="$RETRIEVERS" \
