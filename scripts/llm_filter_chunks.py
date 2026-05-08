@@ -20,6 +20,7 @@ import argparse
 import hashlib
 import json
 import os
+import random
 import sys
 import time
 import urllib.request
@@ -113,6 +114,10 @@ def _parse_args() -> argparse.Namespace:
                         help="Generation temperature. Defaults to 0.6.")
     parser.add_argument("--no-think", action="store_true",
                         help="Disable model thinking for faster smoke tests.")
+    parser.add_argument("--shuffle", action="store_true",
+                        help="Shuffle chunks before processing. Use with --limit for diverse test runs across sources.")
+    parser.add_argument("--shuffle-seed", type=int, default=42,
+                        help="Random seed for --shuffle. Default 42.")
     return parser.parse_args()
 
 
@@ -139,6 +144,24 @@ def _openai_chat_url(base_url: str) -> str:
     if url.endswith("/chat/completions"):
         return url
     return f"{url}/chat/completions"
+
+
+def _build_user_content(chunk: dict[str, Any]) -> str:
+    """Build the user message from a chunk record, including source and breadcrumb when present."""
+    text = chunk.get("text", "").strip()
+    breadcrumb = chunk.get("breadcrumb", "").strip()
+    source = chunk.get("source", "").strip()
+
+    header_lines: list[str] = []
+    if source:
+        header_lines.append(f"Source: {source}")
+    if breadcrumb:
+        header_lines.append(f"Breadcrumb: {breadcrumb}")
+
+    header = "\n".join(header_lines)
+    if header:
+        return f"{header}\n\nChunk:\n{text}"
+    return f"Chunk:\n{text}"
 
 
 def _read_http_error_body(exc: urllib.error.HTTPError) -> str:
@@ -195,13 +218,7 @@ def _call_ollama(
     think: bool,
 ) -> dict[str, Any]:
     """Call Ollama and return the clinical relevance judgment and query."""
-    text = chunk.get("text", "").strip()
-    breadcrumb = chunk.get("breadcrumb", "").strip()
-
-    if breadcrumb:
-        user_content = f"Breadcrumb: {breadcrumb}\n\nChunk:\n{text}"
-    else:
-        user_content = f"Chunk:\n{text}"
+    user_content = _build_user_content(chunk)
 
     payload = json.dumps({
         "model": model,
@@ -250,13 +267,7 @@ def _call_openai(
     think: bool,
 ) -> dict[str, Any]:
     """Call an OpenAI-compatible chat endpoint such as vLLM."""
-    text = chunk.get("text", "").strip()
-    breadcrumb = chunk.get("breadcrumb", "").strip()
-
-    if breadcrumb:
-        user_content = f"Breadcrumb: {breadcrumb}\n\nChunk:\n{text}"
-    else:
-        user_content = f"Chunk:\n{text}"
+    user_content = _build_user_content(chunk)
 
     request_payload: dict[str, Any] = {
         "model": model,
@@ -360,6 +371,10 @@ def main() -> int:
 
     chunks = _read_jsonl(input_path)
     print(f"Loaded {len(chunks)} sampled chunks from {input_path}")
+
+    if args.shuffle:
+        random.Random(args.shuffle_seed).shuffle(chunks)
+        print(f"Shuffled with seed={args.shuffle_seed}")
 
     done_ids: set[str] = set()
     if args.resume:

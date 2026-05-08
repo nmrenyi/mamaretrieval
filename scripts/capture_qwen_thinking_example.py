@@ -23,6 +23,7 @@ from llm_filter_chunks import (
     OLLAMA_URL,
     OPENAI_BASE_URL,
     SYSTEM_PROMPT,
+    _build_user_content,
     _openai_chat_url,
     _resolve_model,
 )
@@ -72,14 +73,6 @@ def _read_chunk(path: Path, chunk_line: int, chunk_id: str) -> dict[str, Any]:
     if chunk_id:
         raise ValueError(f"Could not find chunk_id={chunk_id!r} in {path}")
     raise ValueError(f"Could not find line {chunk_line} in {path}")
-
-
-def _build_user_content(chunk: dict[str, Any]) -> str:
-    text = chunk.get("text", "").strip()
-    breadcrumb = chunk.get("breadcrumb", "").strip()
-    if breadcrumb:
-        return f"Breadcrumb: {breadcrumb}\n\nChunk:\n{text}"
-    return f"Chunk:\n{text}"
 
 
 def _build_ollama_payload(args: argparse.Namespace, model: str, user_content: str) -> dict[str, Any]:
@@ -200,6 +193,57 @@ def _capture_openai(
     return thinking_text, content_text, 1, response
 
 
+def _format_params_section(payload: dict[str, Any]) -> str:
+    """Format request parameters (everything except messages) as readable key: value lines."""
+    params = {k: v for k, v in payload.items() if k != "messages"}
+    return json.dumps(params, ensure_ascii=False, indent=2)
+
+
+def _write_pretty(
+    path: Path,
+    *,
+    backend: str,
+    model: str,
+    chunk_line: int,
+    chunk: dict[str, Any],
+    payload: dict[str, Any],
+    user_content: str,
+    elapsed: float | None = None,
+    event_count: int | None = None,
+    thinking_text: str = "",
+    content_text: str = "",
+    error: Exception | None = None,
+) -> None:
+    header_lines = [
+        f"BACKEND: {backend}",
+        f"MODEL: {model}",
+        f"SOURCE: {chunk.get('source', '')}",
+        f"CHUNK LINE: {chunk_line}",
+        f"CHUNK ID: {chunk.get('chunk_id')}",
+        f"BREADCRUMB: {chunk.get('breadcrumb', '')}",
+    ]
+    if elapsed is not None:
+        header_lines.append(f"ELAPSED SECONDS: {elapsed:.2f}")
+    if event_count is not None:
+        header_lines.append(f"STREAM EVENTS: {event_count}")
+    header_lines += [
+        f"THINKING CHARS: {len(thinking_text)}",
+        f"CONTENT CHARS: {len(content_text)}",
+    ]
+    if error is not None:
+        header_lines.append(f"ERROR: {type(error).__name__}: {error}")
+
+    sections = [
+        "\n".join(header_lines),
+        "===== REQUEST PARAMETERS =====\n" + _format_params_section(payload),
+        "===== SYSTEM PROMPT =====\n" + SYSTEM_PROMPT,
+        "===== USER MESSAGE =====\n" + user_content,
+        "===== THINKING =====\n" + thinking_text,
+        "===== FINAL CONTENT =====\n" + content_text,
+    ]
+    path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
+
+
 def _write_error_pretty(
     args: argparse.Namespace,
     model: str,
@@ -207,31 +251,19 @@ def _write_error_pretty(
     prefix: Path,
     chunk: dict[str, Any],
     payload: dict[str, Any],
+    user_content: str,
     exc: Exception,
 ) -> None:
     pretty_path = Path(f"{prefix}_pretty.txt")
-    payload_text = json.dumps(payload, ensure_ascii=False, indent=2)
-    pretty_path.write_text(
-        "BACKEND: {backend}\n"
-        "MODEL: {model}\n"
-        "CHUNK LINE: {chunk_line}\n"
-        "CHUNK ID: {chunk_id}\n"
-        "BREADCRUMB: {breadcrumb}\n"
-        "ERROR: {error_type}: {error}\n\n"
-        "===== FULL INPUT PAYLOAD =====\n"
-        "{payload_text}\n\n"
-        "===== THINKING =====\n\n"
-        "===== FINAL CONTENT =====\n".format(
-            backend=args.backend,
-            model=model,
-            chunk_line=args.chunk_line,
-            chunk_id=chunk.get("chunk_id"),
-            breadcrumb=chunk.get("breadcrumb"),
-            error_type=type(exc).__name__,
-            error=exc,
-            payload_text=payload_text,
-        ),
-        encoding="utf-8",
+    _write_pretty(
+        pretty_path,
+        backend=args.backend,
+        model=model,
+        chunk_line=args.chunk_line,
+        chunk=chunk,
+        payload=payload,
+        user_content=user_content,
+        error=exc,
     )
     Path(f"{prefix}_error.txt").write_text(
         f"{type(exc).__name__}: {exc}\n", encoding="utf-8"
@@ -270,12 +302,11 @@ def main() -> int:
                 args, payload, raw_path
             )
     except Exception as exc:
-        _write_error_pretty(args, model, input_path, prefix, chunk, payload, exc)
+        _write_error_pretty(args, model, input_path, prefix, chunk, payload, user_content, exc)
         print(f"ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
     elapsed = time.time() - started
-    payload_text = json.dumps(payload, ensure_ascii=False, indent=2)
 
     full = {
         "backend": args.backend,
@@ -283,6 +314,7 @@ def main() -> int:
         "input": str(input_path),
         "chunk_line": args.chunk_line,
         "chunk_id": chunk.get("chunk_id"),
+        "source": chunk.get("source"),
         "breadcrumb": chunk.get("breadcrumb"),
         "chunk_text": text,
         "system_prompt": SYSTEM_PROMPT,
@@ -296,36 +328,18 @@ def main() -> int:
     }
     if not args.pretty_only:
         full_path.write_text(json.dumps(full, ensure_ascii=False, indent=2), encoding="utf-8")
-    pretty_path.write_text(
-        "BACKEND: {backend}\n"
-        "MODEL: {model}\n"
-        "CHUNK LINE: {chunk_line}\n"
-        "CHUNK ID: {chunk_id}\n"
-        "BREADCRUMB: {breadcrumb}\n"
-        "ELAPSED SECONDS: {elapsed:.2f}\n"
-        "STREAM EVENTS: {events}\n"
-        "THINKING CHARS: {thinking_chars}\n"
-        "CONTENT CHARS: {content_chars}\n\n"
-        "===== FULL INPUT PAYLOAD =====\n"
-        "{payload_text}\n\n"
-        "===== THINKING =====\n"
-        "{thinking}\n\n"
-        "===== FINAL CONTENT =====\n"
-        "{content}\n".format(
-            backend=args.backend,
-            model=model,
-            chunk_line=args.chunk_line,
-            chunk_id=chunk.get("chunk_id"),
-            breadcrumb=chunk.get("breadcrumb"),
-            elapsed=elapsed,
-            events=event_count,
-            thinking_chars=len(thinking_text),
-            content_chars=len(content_text),
-            payload_text=payload_text,
-            thinking=thinking_text,
-            content=content_text,
-        ),
-        encoding="utf-8",
+    _write_pretty(
+        pretty_path,
+        backend=args.backend,
+        model=model,
+        chunk_line=args.chunk_line,
+        chunk=chunk,
+        payload=payload,
+        user_content=user_content,
+        elapsed=elapsed,
+        event_count=event_count,
+        thinking_text=thinking_text,
+        content_text=content_text,
     )
 
     if not args.pretty_only:
