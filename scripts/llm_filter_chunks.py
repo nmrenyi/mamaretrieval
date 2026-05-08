@@ -147,14 +147,17 @@ def _openai_chat_url(base_url: str) -> str:
 
 
 def _build_user_content(chunk: dict[str, Any]) -> str:
-    """Build the user message from a chunk record, including source and breadcrumb when present."""
+    """Build the user message from a chunk record, including source, page, and breadcrumb when present."""
     text = chunk.get("text", "").strip()
     breadcrumb = chunk.get("breadcrumb", "").strip()
     source = chunk.get("source", "").strip()
+    page = chunk.get("page")
 
     header_lines: list[str] = []
     if source:
         header_lines.append(f"Source: {source}")
+    if page is not None:
+        header_lines.append(f"Page: {page}")
     if breadcrumb:
         header_lines.append(f"Breadcrumb: {breadcrumb}")
 
