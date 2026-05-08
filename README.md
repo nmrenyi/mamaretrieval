@@ -33,14 +33,14 @@ All pipeline outputs are written under `data/` and are gitignored.
 
 ## Current Status
 
-**Phase 1b complete** — 3,185 seed queries generated and quality-verified.
+**Phase 1c complete** — 3,185 per-chunk queries assembled. Synthesis and adversarial queries tracked in issue #5.
 
 | Phase | Status |
 |-------|--------|
 | 1a — Corpus sampling | Done |
 | 1b — LLM filtering + query generation | Done |
-| 1c — Assemble final query records | Next |
-| 2a — Retrieval candidate pooling | Pending |
+| 1c — Assemble final query records | Done |
+| 2a — Retrieval candidate pooling | Next |
 | 2b — LLM relevance judging | Pending |
 | 3 — Audit | Pending |
 
@@ -188,6 +188,29 @@ We evaluated retriever choices against two benchmarks:
 voyage-4-large (API, best overall), BGE-reranker (cross-encoder re-ranking), LateOn (late-interaction diversity), top-20 per retriever instead of top-10.
 
 Full candidate evaluation with scores and reasoning for all considered retrievers: https://github.com/nmrenyi/mamaretrieval/issues/6
+
+### Phase 2a — Execution
+
+`scripts/pool_candidates.py` parses the 63,650-chunk corpus, builds BM25 and
+dense indexes (embeddings cached to `.cache/`), retrieves top-10 per retriever
+for each query, applies RRF, and force-includes the seed chunk in each pool.
+
+```bash
+bash scripts/submit_pool_candidates.sh   # submits 5 Run:ai jobs on EPFL light cluster
+```
+
+Each job: 1× H100, 8 CPU cores, 96 GB RAM, `--shard INDEX 5`. Corpus embeddings
+(MedCPT and Octen) are shared across shards via a common `.cache/` directory.
+Outputs to `data/candidates_shard{N}.jsonl`, merged afterward:
+
+```bash
+cat data/candidates_shard{0..4}.jsonl > data/candidates.jsonl
+```
+
+**Seed chunk policy:** the seed chunk for each query is force-included in the
+candidate pool if no retriever returned it. It is **not** pre-labeled as
+relevant — the LLM judge in Phase 2b evaluates it along with all other
+candidates. A seed chunk may not fully answer a general query.
 
 ---
 

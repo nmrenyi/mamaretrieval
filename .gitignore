@@ -34,6 +34,7 @@ data/audit/query_ids.txt
 *.npz
 .cache/
 cache/
+data/candidates*.jsonl
 
 # Logs and local outputs
 *.log
