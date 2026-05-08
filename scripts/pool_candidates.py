@@ -113,9 +113,9 @@ def build_medcpt_corpus_embeddings(
     import torch
     from transformers import AutoModel, AutoTokenizer
 
-    print("  Encoding corpus with ncats/MedCPT-Article-Encoder...", flush=True)
-    tok = AutoTokenizer.from_pretrained("ncats/MedCPT-Article-Encoder")
-    model = AutoModel.from_pretrained("ncats/MedCPT-Article-Encoder").to(device)
+    print("  Encoding corpus with ncbi/MedCPT-Article-Encoder...", flush=True)
+    tok = AutoTokenizer.from_pretrained("ncbi/MedCPT-Article-Encoder")
+    model = AutoModel.from_pretrained("ncbi/MedCPT-Article-Encoder").to(device)
     model.eval()
 
     all_embs: list[np.ndarray] = []
@@ -149,8 +149,8 @@ def encode_medcpt_queries(
     import torch
     from transformers import AutoModel, AutoTokenizer
 
-    tok = AutoTokenizer.from_pretrained("ncats/MedCPT-Query-Encoder")
-    model = AutoModel.from_pretrained("ncats/MedCPT-Query-Encoder").to(device)
+    tok = AutoTokenizer.from_pretrained("ncbi/MedCPT-Query-Encoder")
+    model = AutoModel.from_pretrained("ncbi/MedCPT-Query-Encoder").to(device)
     model.eval()
 
     all_embs: list[np.ndarray] = []
