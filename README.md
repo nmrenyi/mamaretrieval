@@ -33,15 +33,15 @@ All pipeline outputs are written under `data/` and are gitignored.
 
 ## Current Status
 
-**Phase 1c complete** — 3,185 per-chunk queries assembled. Synthesis and adversarial queries tracked in issue #5.
+**Phase 2a complete** — candidate pools built for all 3,185 queries.
 
 | Phase | Status |
 |-------|--------|
 | 1a — Corpus sampling | Done |
 | 1b — LLM filtering + query generation | Done |
 | 1c — Assemble final query records | Done |
-| 2a — Retrieval candidate pooling | Next |
-| 2b — LLM relevance judging | Pending |
+| 2a — Retrieval candidate pooling | Done |
+| 2b — LLM relevance judging | Next |
 | 3 — Audit | Pending |
 
 ---
@@ -181,7 +181,9 @@ We evaluated retriever choices against two benchmarks:
 | BM25 | Sparse lexical | Exact term recall |
 | MedCPT | Medical dense bi-encoder | Biomedical domain recall |
 | Octen-Embedding-8B | General dense bi-encoder | Semantic recall |
-| RRF (BM25 + MedCPT + Octen) | Hybrid fusion | Combined recall |
+
+Candidate pool = union of the three top-10 lists (max 30 per query; actual avg ~25 due to inter-retriever overlap).
+RRF is applied after pooling to rank candidates for Phase 2b judging — it reorders the pool, it does not add new candidates.
 
 ### Phase 3 audit additions
 
@@ -211,6 +213,19 @@ cat data/candidates_shard{0..4}.jsonl > data/candidates.jsonl
 candidate pool if no retriever returned it. It is **not** pre-labeled as
 relevant — the LLM judge in Phase 2b evaluates it along with all other
 candidates. A seed chunk may not fully answer a general query.
+
+### Results
+
+| Metric | Value |
+|--------|-------|
+| Queries processed | 3,185 |
+| Total candidates | 78,571 |
+| Avg candidates/query | 24.7 (max 30, actual max 31) |
+| Seed found by ≥1 retriever | 3,015 (94.7%) |
+| Seed force-included (missed by all) | 170 (5.3%) |
+
+Wall time: ~20 minutes across 5 H100 shards (corpus encoding dominated by
+Octen-Embedding-8B; MedCPT embeddings were cached from a prior run).
 
 ---
 
