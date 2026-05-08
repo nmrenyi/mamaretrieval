@@ -24,6 +24,15 @@ export HF_HOME="${HF_HOME:-$REPO_DIR/hf_cache}"
 export PYTHONUSERBASE="${PYTHONUSERBASE:-$REPO_DIR/python_user}"
 export PATH="$PYTHONUSERBASE/bin:$HOME/.local/bin:$PATH"
 
+# Load HF token from file if provided (set HF_API_KEY_FILE_AT in the submit script)
+HF_API_KEY_FILE_AT="${HF_API_KEY_FILE_AT:-/lightscratch/users/yiren/keys/hf_key.txt}"
+if [[ -f "$HF_API_KEY_FILE_AT" ]]; then
+  export HF_TOKEN="$(cat "$HF_API_KEY_FILE_AT")"
+  echo "HF token loaded from $HF_API_KEY_FILE_AT"
+else
+  echo "WARNING: HF token file not found at $HF_API_KEY_FILE_AT — model downloads may fail" >&2
+fi
+
 cd "$REPO_DIR"
 mkdir -p logs data "$HOME" "$HF_HOME" "$PYTHONUSERBASE" "$CACHE_DIR"
 

@@ -25,6 +25,7 @@ TOP_K="${TOP_K:-10}"
 BATCH_SIZE="${BATCH_SIZE:-64}"
 DEVICE="${DEVICE:-cuda}"
 CACHE_DIR="${CACHE_DIR:-$REPO_DIR/.cache}"
+HF_API_KEY_FILE_AT="${HF_API_KEY_FILE_AT:-/lightscratch/users/yiren/keys/hf_key.txt}"
 
 LOCAL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVER_ROOT="$SERVER:$SERVER_SCRATCH"
@@ -67,6 +68,7 @@ for shard in $(seq 0 $((SHARD_COUNT - 1))); do
     -e DEVICE="$DEVICE" \
     -e CACHE_DIR="$CACHE_DIR" \
     -e HF_HOME="$REPO_DIR/hf_cache" \
+    -e HF_API_KEY_FILE_AT="$HF_API_KEY_FILE_AT" \
     -e PYTHONUSERBASE="$REPO_DIR/python_user" \
     -e RUNAI_HOME="$REPO_DIR/runai_home" \
     -- bash "$REPO_DIR/scripts/run_pool_candidates_job.sh"
