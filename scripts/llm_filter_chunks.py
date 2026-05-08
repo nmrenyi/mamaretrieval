@@ -81,7 +81,12 @@ Return exactly one JSON object — no prose, no markdown fences:
 {"query": null, "reason": "<≤30 words>"}"""
 
 RESULT_SCHEMA_VERSION = "query-reason-v1"
-PROMPT_HASH = hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest()[:16]
+# Bump this string whenever _build_user_content changes, so --resume rejects
+# results generated with a different user-message template.
+_INPUT_TEMPLATE_VERSION = "user-source-page-v1"
+PROMPT_HASH = hashlib.sha256(
+    (SYSTEM_PROMPT + "\x00" + _INPUT_TEMPLATE_VERSION).encode("utf-8")
+).hexdigest()[:16]
 
 
 def _parse_args() -> argparse.Namespace:
