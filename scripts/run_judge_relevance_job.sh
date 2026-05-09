@@ -7,7 +7,7 @@
 # Optional env vars (all have defaults):
 #   REPO_DIR, CORPUS_PATH, MODEL, TENSOR_PARALLEL, MAX_MODEL_LEN, MAX_NUM_SEQS,
 #   GPU_MEMORY_UTILIZATION, GDN_PREFILL_BACKEND, WORKERS, MAX_TOKENS, TEMPERATURE,
-#   HF_API_KEY_FILE_AT
+#   HF_API_KEY_FILE_AT, LIMIT (0 = no limit; set >0 for test runs)
 
 set -euo pipefail
 
@@ -15,13 +15,14 @@ REPO_DIR="${REPO_DIR:-/lightscratch/users/yiren/mamaretrieval}"
 CORPUS_PATH="${CORPUS_PATH:-/lightscratch/users/yiren/mamai-medical-guidelines/processed/chunks_for_rag.txt}"
 MODEL="${MODEL:-Qwen/Qwen3.5-397B-A17B-FP8}"
 TENSOR_PARALLEL="${TENSOR_PARALLEL:-8}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"
-MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
 GDN_PREFILL_BACKEND="${GDN_PREFILL_BACKEND:-triton}"
 WORKERS="${WORKERS:-8}"
-MAX_TOKENS="${MAX_TOKENS:-2048}"
+MAX_TOKENS="${MAX_TOKENS:-30000}"
 TEMPERATURE="${TEMPERATURE:-0.0}"
+LIMIT="${LIMIT:-0}"
 
 : "${SHARD_INDEX:?ERROR: SHARD_INDEX must be set}"
 : "${SHARD_COUNT:?ERROR: SHARD_COUNT must be set}"
@@ -89,12 +90,8 @@ echo "$VLLM_PID" > "logs/vllm_judge_shard${SHARD_INDEX}.pid"
 
 echo "Waiting for vLLM to become ready..."
 for _attempt in $(seq 1 180); do
-  if python3 - <<'PY' >/dev/null 2>&1
-import urllib.request
-urllib.request.urlopen("http://127.0.0.1:8000/v1/models", timeout=2).read()
-PY
-  then
-    echo "vLLM ready."
+  if grep -q "Application startup complete" "$VLLM_LOG" 2>/dev/null; then
+    echo "vLLM ready (startup complete in log)."
     break
   fi
   if ! kill -0 "$VLLM_PID" 2>/dev/null; then
@@ -106,6 +103,14 @@ PY
 done
 
 OUTPUT="data/relevance_labels_shard${SHARD_INDEX}.jsonl"
+
+LIMIT_ARGS=()
+RESUME_ARGS=(--resume)
+if [[ "$LIMIT" -gt 0 ]]; then
+  LIMIT_ARGS=(--limit "$LIMIT" --shuffle)
+  RESUME_ARGS=()   # keep error records in test mode so we can inspect them
+  echo "Test mode: limiting to $LIMIT queries (shuffled), no dedup."
+fi
 
 echo "Starting relevance judge: shard ${SHARD_INDEX}/${SHARD_COUNT}, workers=${WORKERS}"
 python3 -u scripts/judge_relevance.py \
@@ -120,6 +125,7 @@ python3 -u scripts/judge_relevance.py \
   --workers "$WORKERS" \
   --max-tokens "$MAX_TOKENS" \
   --temperature "$TEMPERATURE" \
-  --resume
+  "${RESUME_ARGS[@]}" \
+  "${LIMIT_ARGS[@]}"
 
 echo "Shard ${SHARD_INDEX} complete. Output: $OUTPUT"

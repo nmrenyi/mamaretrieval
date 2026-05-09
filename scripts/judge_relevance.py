@@ -430,7 +430,7 @@ def _call_openai(
         detail = _read_http_error_body(exc)
         raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
 
-    raw    = response["choices"][0]["message"]["content"].strip()
+    raw    = (response["choices"][0]["message"]["content"] or "").strip()
     parsed = json.loads(raw)
 
     d1 = bool(parsed["d1_topic"])

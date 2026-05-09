@@ -19,13 +19,14 @@ REPO_DIR="${REPO_DIR:-/lightscratch/users/yiren/mamaretrieval}"
 CORPUS_PATH="${CORPUS_PATH:-/lightscratch/users/yiren/mamai-medical-guidelines/processed/chunks_for_rag.txt}"
 MODEL="${MODEL:-Qwen/Qwen3.5-397B-A17B-FP8}"
 TENSOR_PARALLEL="${TENSOR_PARALLEL:-8}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"
-MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
 GDN_PREFILL_BACKEND="${GDN_PREFILL_BACKEND:-triton}"
 WORKERS="${WORKERS:-8}"
-MAX_TOKENS="${MAX_TOKENS:-2048}"
+MAX_TOKENS="${MAX_TOKENS:-30000}"
 TEMPERATURE="${TEMPERATURE:-0.0}"
 SHARD_COUNT="${SHARD_COUNT:-5}"
+LIMIT="${LIMIT:-0}"
 HF_API_KEY_FILE_AT="${HF_API_KEY_FILE_AT:-/lightscratch/users/yiren/keys/hf_key.txt}"
 
 LOCAL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -71,6 +72,7 @@ for shard in $(seq 0 $((SHARD_COUNT - 1))); do
     -e TEMPERATURE="$TEMPERATURE" \
     -e SHARD_INDEX="$shard" \
     -e SHARD_COUNT="$SHARD_COUNT" \
+    -e LIMIT="$LIMIT" \
     -e HF_HOME="$REPO_DIR/hf_cache" \
     -e PYTHONUSERBASE="$REPO_DIR/python_user" \
     -e RUNAI_HOME="$REPO_DIR/runai_home" \
