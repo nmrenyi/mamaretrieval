@@ -5,7 +5,7 @@
 #   SHARD_INDEX, SHARD_COUNT
 #
 # Optional env vars (all have defaults):
-#   REPO_DIR, CORPUS_PATH, MODEL, MAX_MODEL_LEN, MAX_NUM_SEQS,
+#   REPO_DIR, CORPUS_PATH, MODEL, TENSOR_PARALLEL, MAX_MODEL_LEN, MAX_NUM_SEQS,
 #   GPU_MEMORY_UTILIZATION, GDN_PREFILL_BACKEND, WORKERS, MAX_TOKENS, TEMPERATURE,
 #   HF_API_KEY_FILE_AT
 
@@ -13,7 +13,8 @@ set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-/lightscratch/users/yiren/mamaretrieval}"
 CORPUS_PATH="${CORPUS_PATH:-/lightscratch/users/yiren/mamai-medical-guidelines/processed/chunks_for_rag.txt}"
-MODEL="${MODEL:-Qwen/Qwen3-32B}"
+MODEL="${MODEL:-Qwen/Qwen3.5-397B-A17B-FP8}"
+TENSOR_PARALLEL="${TENSOR_PARALLEL:-8}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
@@ -76,6 +77,7 @@ vllm serve "$MODEL" \
   --host 0.0.0.0 \
   --port 8000 \
   --reasoning-parser qwen3 \
+  --tensor-parallel-size "$TENSOR_PARALLEL" \
   --max-model-len "$MAX_MODEL_LEN" \
   --max-num-seqs "$MAX_NUM_SEQS" \
   --language-model-only \

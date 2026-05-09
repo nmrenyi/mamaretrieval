@@ -17,7 +17,8 @@ SERVER="${SERVER:-light}"
 SERVER_SCRATCH="${SERVER_SCRATCH:-/mnt/light/scratch/users/yiren/mamaretrieval}"
 REPO_DIR="${REPO_DIR:-/lightscratch/users/yiren/mamaretrieval}"
 CORPUS_PATH="${CORPUS_PATH:-/lightscratch/users/yiren/mamai-medical-guidelines/processed/chunks_for_rag.txt}"
-MODEL="${MODEL:-Qwen/Qwen3-32B}"
+MODEL="${MODEL:-Qwen/Qwen3.5-397B-A17B-FP8}"
+TENSOR_PARALLEL="${TENSOR_PARALLEL:-8}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}"
 GDN_PREFILL_BACKEND="${GDN_PREFILL_BACKEND:-triton}"
@@ -50,9 +51,9 @@ for shard in $(seq 0 $((SHARD_COUNT - 1))); do
   ssh "$SERVER" runai submit "$JOB_NAME" \
     --image "$IMAGE" \
     --pvc light-scratch:/lightscratch \
-    --gpu 1 \
-    --cpu 8 --cpu-limit 8 \
-    --memory 96G --memory-limit 96G \
+    --gpu "$TENSOR_PARALLEL" \
+    --cpu 16 --cpu-limit 16 \
+    --memory 256G --memory-limit 256G \
     --large-shm \
     --node-pool h100 \
     --project "$PROJECT" \
@@ -61,6 +62,7 @@ for shard in $(seq 0 $((SHARD_COUNT - 1))); do
     -e REPO_DIR="$REPO_DIR" \
     -e CORPUS_PATH="$CORPUS_PATH" \
     -e MODEL="$MODEL" \
+    -e TENSOR_PARALLEL="$TENSOR_PARALLEL" \
     -e MAX_MODEL_LEN="$MAX_MODEL_LEN" \
     -e MAX_NUM_SEQS="$MAX_NUM_SEQS" \
     -e GDN_PREFILL_BACKEND="$GDN_PREFILL_BACKEND" \
