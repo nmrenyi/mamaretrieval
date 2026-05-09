@@ -33,7 +33,7 @@ All pipeline outputs are written under `data/` and are gitignored.
 
 ## Current Status
 
-**Phase 2a complete** — candidate pools built for all 3,185 queries.
+**Phase 2b implemented** — relevance judge scripts ready to run on the cluster.
 
 | Phase | Status |
 |-------|--------|
@@ -41,7 +41,7 @@ All pipeline outputs are written under `data/` and are gitignored.
 | 1b — LLM filtering + query generation | Done |
 | 1c — Assemble final query records | Done |
 | 2a — Retrieval candidate pooling | Done |
-| 2b — LLM relevance judging | Next |
+| 2b — LLM relevance judging | Ready |
 | 3 — Audit | Pending |
 
 ---
@@ -226,6 +226,103 @@ candidates. A seed chunk may not fully answer a general query.
 
 Wall time: ~20 minutes across 5 H100 shards (corpus encoding dominated by
 Octen-Embedding-8B; MedCPT embeddings were cached from a prior run).
+
+---
+
+## Phase 2b — LLM Relevance Judging
+
+`scripts/judge_relevance.py` calls an LLM to label each of the 78,571
+(query, chunk) candidate pairs on three binary dimensions.
+
+### Relevance scoring design
+
+Each pair is assessed independently on:
+
+| Dimension | Question | YES means… |
+|-----------|----------|------------|
+| **D1 — Topic** | Same clinical problem? | Same condition / event / drug / procedure as the query |
+| **D2 — Meaningful** | Contains clinical info? | Background, risk factors, definitions, diagnostic criteria, management principles |
+| **D3 — Actionable** | Contains specific guidance? | Dosing, protocols, thresholds, management steps, specific recommendations |
+
+**Score formula** (computed in Python post-processing, not by the model):
+
+```
+score = D1 * (D2 + D3)   →   range 0–2
+```
+
+| D1 | D2 | D3 | score | Interpretation |
+|----|----|-----|-------|---------------|
+| No | — | — | 0 | Off-topic |
+| Yes | No | No | 0 | On-topic but no clinical content |
+| Yes | Yes | No | 1 | On-topic, background only |
+| Yes | Yes | Yes | 2 | On-topic, actionable guidance |
+
+D3=True implies D2=True (actionable ⟹ meaningful); this constraint is
+enforced in post-processing. The model answers all three dimensions
+independently — no conditioning in the prompt.
+
+#### Research backing
+
+- **TREC-CDS 3-level scale** (Not Relevant / Possibly Relevant / Definitely
+  Relevant) motivates a three-level ordinal scale for clinical IR rather than
+  binary.
+- **DeCE** (decomposed binary evaluation) shows that asking dimensions
+  separately and combining in post-processing achieves inter-annotator
+  correlation r = 0.78 vs. r = 0.35 for holistic grading.
+- **Saracevic relevance hierarchy** (topical → cognitive → situational)
+  maps to D1 (topical match), D2 (clinical depth), D3 (situational
+  actionability for a midwife/doctor).
+- **UMBRELA** (TREC 2024): binary relevance with a clear topical gate is
+  more reproducible than nuanced multi-level scales.
+- **HealthBench** (Arora et al. 2025): the step-by-step CoT structure
+  (reasoning before verdict) and binary per-criterion assessment were
+  adopted for our prompt design.
+- **G-Eval principle**: placing `reasoning` first in the JSON schema
+  forces the model to reason before committing to labels; vLLM's
+  `guided_json` enforces the field generation order.
+
+### Implementation highlights
+
+- **guided_json**: vLLM extension that enforces the output schema at
+  inference time. Field order in `"required"` drives token generation —
+  `reasoning` is emitted before the boolean verdicts.
+- **PROMPT_HASH**: SHA256(system_prompt + sentinel_user_content)[:16].
+  Any change to either the prompt text or the user message template
+  automatically invalidates `--resume` caches.
+- **RESULT_SCHEMA_VERSION**: derived from `JudgeResult.__annotations__`.
+  Changes automatically when a field is added or removed.
+- **Resume**: done pairs identified by `query_id::chunk_id`. Error records
+  (score = −1) are re-processed on the next run. A post-run dedup step
+  rewrites the output to contain only successful labels, deduplicated.
+- **Sharding by query**: all candidates of a query go to the same shard,
+  so per-query statistics are never split across shards.
+- **No negative safety gate**: the corpus is curated clinical guidelines
+  (MSF, WHO, Oxford Handbook). Source quality is the safety layer; the
+  judge focuses on relevance, not content safety.
+
+### Running Phase 2b
+
+```bash
+bash scripts/submit_judge_relevance.sh   # submit 5 parallel H100 jobs
+```
+
+Each job: 1× H100, 8 CPU, 96 GB RAM, `--shard INDEX 5`.
+Model: **Qwen3-32B** via vLLM (`--reasoning-parser qwen3`, `guided_json`).
+Expected wall time: ~2–3 h per shard (78,571 pairs / 5 shards × 8 workers).
+
+Monitor:
+
+```bash
+ssh light 'runai list jobs --project light-yiren'
+ssh light 'runai logs mamaretrieval-judge-shard0 -f --project light-yiren'
+```
+
+Merge after all shards complete:
+
+```bash
+rsync -av light:/mnt/light/scratch/users/yiren/mamaretrieval/data/relevance_labels_shard*.jsonl data/
+cat data/relevance_labels_shard{0..4}.jsonl > data/relevance_labels.jsonl
+```
 
 ---
 
