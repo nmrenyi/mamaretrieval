@@ -22,6 +22,7 @@ GDN_PREFILL_BACKEND="${GDN_PREFILL_BACKEND:-triton}"
 WORKERS="${WORKERS:-8}"
 MAX_TOKENS="${MAX_TOKENS:-30000}"
 TEMPERATURE="${TEMPERATURE:-0.0}"
+JUDGE_TIMEOUT="${JUDGE_TIMEOUT:-1800}"
 LIMIT="${LIMIT:-0}"
 
 : "${SHARD_INDEX:?ERROR: SHARD_INDEX must be set}"
@@ -126,6 +127,7 @@ python3 -u scripts/judge_relevance.py \
   --workers "$WORKERS" \
   --max-tokens "$MAX_TOKENS" \
   --temperature "$TEMPERATURE" \
+  --timeout "$JUDGE_TIMEOUT" \
   "${RESUME_ARGS[@]}" \
   "${LIMIT_ARGS[@]}"
 
