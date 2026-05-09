@@ -84,6 +84,7 @@ vllm serve "$MODEL" \
   --language-model-only \
   --gdn-prefill-backend "$GDN_PREFILL_BACKEND" \
   --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
+  --enforce-eager \
   > "$VLLM_LOG" 2>&1 &
 VLLM_PID=$!
 echo "$VLLM_PID" > "logs/vllm_judge_shard${SHARD_INDEX}.pid"
