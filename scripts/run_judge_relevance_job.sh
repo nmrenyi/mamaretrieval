@@ -73,6 +73,9 @@ if needs_install:
     )
 PY
 
+# Allow torch.compile to finish before NCCL watchdog fires (compile takes ~10min)
+export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=3600
+
 # Start vLLM server in the background
 VLLM_LOG="logs/vllm_judge_shard${SHARD_INDEX}.log"
 vllm serve "$MODEL" \
@@ -85,7 +88,6 @@ vllm serve "$MODEL" \
   --language-model-only \
   --gdn-prefill-backend "$GDN_PREFILL_BACKEND" \
   --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
-  --enforce-eager \
   > "$VLLM_LOG" 2>&1 &
 VLLM_PID=$!
 echo "$VLLM_PID" > "logs/vllm_judge_shard${SHARD_INDEX}.pid"
