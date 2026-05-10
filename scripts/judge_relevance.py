@@ -459,7 +459,13 @@ def _call_openai(
             f"Empty content after thinking. reasoning_content[:3000]:\n{snippet}",
             "", 0,
         )
-    parsed = json.loads(raw)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as _je:
+        raise json.JSONDecodeError(
+            f"JSON parse failed. raw_repr={repr(raw[:300])}: {_je.msg}",
+            raw, _je.pos,
+        ) from _je
 
     d1 = bool(parsed["d1_topic"])
     d2 = bool(parsed["d2_meaningful"])
