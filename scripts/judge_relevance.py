@@ -267,8 +267,12 @@ def _parse_args() -> argparse.Namespace:
                         "Default: %(default)s")
     p.add_argument("--temperature", type=float, default=0.0,
                    help="Generation temperature. Default: %(default)s (deterministic)")
-    p.add_argument("--no-think",   action="store_true",
+    p.add_argument("--no-think",        action="store_true",
                    help="Disable model thinking (faster smoke tests).")
+    p.add_argument("--thinking-budget", type=int, default=0,
+                   help="Cap thinking trace at N tokens (0 = unlimited). Use e.g. "
+                        "16384 to prevent the thinking trace from exhausting max_tokens "
+                        "and leaving no room for the JSON output.")
     p.add_argument("--limit",      type=int, default=0,
                    help="Process at most N queries (0 = all). Default: %(default)s")
     p.add_argument("--shuffle",    action="store_true",
@@ -397,9 +401,14 @@ def _call_openai(
     timeout:     int,
     max_tokens:  int,
     temperature: float,
-    think:       bool,
+    think:            bool,
+    thinking_budget:  int = 0,
 ) -> JudgeResult:
     user_content = _build_user_content(query_text, chunk)
+
+    chat_template_kwargs: dict[str, Any] = {"enable_thinking": think}
+    if think and thinking_budget > 0:
+        chat_template_kwargs["thinking_budget"] = thinking_budget
 
     payload: dict[str, Any] = {
         "model": model,
@@ -411,7 +420,7 @@ def _call_openai(
         "max_tokens":    max_tokens,
         # vLLM extension: enforce JSON schema via guided decoding
         "guided_json":   JUDGE_JSON_SCHEMA,
-        "chat_template_kwargs": {"enable_thinking": think},
+        "chat_template_kwargs": chat_template_kwargs,
     }
 
     headers = {"Content-Type": "application/json"}
@@ -430,7 +439,16 @@ def _call_openai(
         detail = _read_http_error_body(exc)
         raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
 
-    raw    = (response["choices"][0]["message"]["content"] or "").strip()
+    msg    = response["choices"][0]["message"]
+    raw    = (msg.get("content") or "").strip()
+    if not raw:
+        # Thinking trace consumed all tokens — capture it for diagnosis.
+        thinking = (msg.get("reasoning_content") or "")
+        snippet  = thinking[:3000] if thinking else "(no reasoning_content in response)"
+        raise json.JSONDecodeError(
+            f"Empty content after thinking. reasoning_content[:3000]:\n{snippet}",
+            "", 0,
+        )
     parsed = json.loads(raw)
 
     d1 = bool(parsed["d1_topic"])
@@ -524,8 +542,9 @@ def _process_one(
     timeout:     int,
     max_tokens:  int,
     temperature: float,
-    think:       bool,
-    retries:     int = 2,
+    think:            bool,
+    thinking_budget:  int = 0,
+    retries:          int = 2,
 ) -> JudgeResult:
     """Judge one pair, retrying transient errors up to `retries` times."""
     last_err: Exception | None = None
@@ -535,6 +554,7 @@ def _process_one(
                 return _call_openai(
                     query_id, query_text, chunk_id, chunk,
                     model, base_url, api_key, timeout, max_tokens, temperature, think,
+                    thinking_budget,
                 )
             return _call_ollama(
                 query_id, query_text, chunk_id, chunk,
@@ -713,7 +733,7 @@ def main() -> int:
                     args.backend, model,
                     args.ollama_url, args.base_url, args.api_key,
                     args.timeout, args.max_tokens, args.temperature,
-                    not args.no_think,
+                    not args.no_think, args.thinking_budget,
                 ): (qid, cid)
                 for qid, qtext, cid in todo
             }
@@ -731,8 +751,9 @@ def main() -> int:
 
     # On resume: deduplicate output, keeping only current-schema successful labels
     if args.resume:
-        seen:    set[str]          = set()
-        deduped: list[dict[str, Any]] = []
+        seen:          set[str]          = set()
+        deduped:       list[dict[str, Any]] = []
+        error_records: list[dict[str, Any]] = []
         with output_path.open(encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
@@ -742,6 +763,7 @@ def main() -> int:
                 if not _matches_contract(rec, args.backend, model):
                     continue
                 if rec.get("score", -1) < 0:
+                    error_records.append(rec)
                     continue
                 key = _pair_key(rec["query_id"], rec["chunk_id"])
                 if key not in seen:
@@ -750,6 +772,12 @@ def main() -> int:
         with output_path.open("w", encoding="utf-8") as fh:
             for rec in deduped:
                 fh.write(json.dumps(rec) + "\n")
+        if error_records:
+            error_path = output_path.parent / (output_path.stem + "_errors.jsonl")
+            with error_path.open("w", encoding="utf-8") as fh:
+                for rec in error_records:
+                    fh.write(json.dumps(rec) + "\n")
+            print(f"Error records saved:  {len(error_records):,} → {error_path}")
         print(f"Deduplicated output: {len(deduped):,} labeled pairs → {output_path}")
 
     return 0

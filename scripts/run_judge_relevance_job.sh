@@ -24,6 +24,7 @@ WORKERS="${WORKERS:-8}"
 MAX_TOKENS="${MAX_TOKENS:-30000}"
 TEMPERATURE="${TEMPERATURE:-0.0}"
 JUDGE_TIMEOUT="${JUDGE_TIMEOUT:-1800}"
+THINKING_BUDGET="${THINKING_BUDGET:-0}"
 LIMIT="${LIMIT:-0}"
 
 : "${SHARD_INDEX:?ERROR: SHARD_INDEX must be set}"
@@ -95,9 +96,11 @@ VLLM_PID=$!
 echo "$VLLM_PID" > "logs/vllm_judge_shard${SHARD_INDEX}.pid"
 
 echo "Waiting for vLLM to become ready..."
-for _attempt in $(seq 1 180); do
+_vllm_ready=0
+for _attempt in $(seq 1 360); do
   if grep -q "Application startup complete" "$VLLM_LOG" 2>/dev/null; then
     echo "vLLM ready (startup complete in log)."
+    _vllm_ready=1
     break
   fi
   if ! kill -0 "$VLLM_PID" 2>/dev/null; then
@@ -107,8 +110,15 @@ for _attempt in $(seq 1 180); do
   fi
   sleep 10
 done
+if [[ "$_vllm_ready" -eq 0 ]]; then
+  echo "ERROR: vLLM did not become ready within 60 minutes (torch.compile may have hung). Last log lines:" >&2
+  tail -n 40 "$VLLM_LOG" >&2 || true
+  kill "$VLLM_PID" 2>/dev/null || true
+  exit 1
+fi
 
-OUTPUT="data/relevance_labels_shard${SHARD_INDEX}.jsonl"
+INPUT="${INPUT:-data/candidates.jsonl}"
+OUTPUT="${OUTPUT:-data/relevance_labels_shard${SHARD_INDEX}.jsonl}"
 
 LIMIT_ARGS=()
 RESUME_ARGS=(--resume)
@@ -124,7 +134,7 @@ python3 -u scripts/judge_relevance.py \
   --base-url http://127.0.0.1:8000/v1 \
   --api-key EMPTY \
   --model "$MODEL" \
-  --input data/candidates.jsonl \
+  --input "$INPUT" \
   --corpus "$CORPUS_PATH" \
   --output "$OUTPUT" \
   --shard "$SHARD_INDEX" "$SHARD_COUNT" \
@@ -132,6 +142,7 @@ python3 -u scripts/judge_relevance.py \
   --max-tokens "$MAX_TOKENS" \
   --temperature "$TEMPERATURE" \
   --timeout "$JUDGE_TIMEOUT" \
+  ${THINKING_BUDGET:+--thinking-budget "$THINKING_BUDGET"} \
   "${RESUME_ARGS[@]}" \
   "${LIMIT_ARGS[@]}"
 
