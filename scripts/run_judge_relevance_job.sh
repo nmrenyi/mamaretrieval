@@ -6,8 +6,8 @@
 #
 # Optional env vars (all have defaults):
 #   REPO_DIR, CORPUS_PATH, MODEL, TENSOR_PARALLEL, MAX_MODEL_LEN, MAX_NUM_SEQS,
-#   GPU_MEMORY_UTILIZATION, GDN_PREFILL_BACKEND, WORKERS, MAX_TOKENS, TEMPERATURE,
-#   HF_API_KEY_FILE_AT, LIMIT (0 = no limit; set >0 for test runs)
+#   GPU_MEMORY_UTILIZATION, GDN_PREFILL_BACKEND, KV_CACHE_DTYPE, WORKERS,
+#   MAX_TOKENS, TEMPERATURE, HF_API_KEY_FILE_AT, LIMIT (0 = no limit; set >0 for test runs)
 
 set -euo pipefail
 
@@ -19,6 +19,7 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
 GDN_PREFILL_BACKEND="${GDN_PREFILL_BACKEND:-triton}"
+KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"
 WORKERS="${WORKERS:-8}"
 MAX_TOKENS="${MAX_TOKENS:-30000}"
 TEMPERATURE="${TEMPERATURE:-0.0}"
@@ -88,6 +89,7 @@ vllm serve "$MODEL" \
   --language-model-only \
   --gdn-prefill-backend "$GDN_PREFILL_BACKEND" \
   --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
+  --kv-cache-dtype "$KV_CACHE_DTYPE" \
   > "$VLLM_LOG" 2>&1 &
 VLLM_PID=$!
 echo "$VLLM_PID" > "logs/vllm_judge_shard${SHARD_INDEX}.pid"
