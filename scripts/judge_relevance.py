@@ -451,6 +451,14 @@ def _call_openai(
     elif raw.startswith("</think>"):
         raw = raw[len("</think>"):].strip()
 
+    # Strip markdown code fence (```json\n...\n``` or ```\n...\n```)
+    if raw.startswith("```"):
+        newline = raw.find("\n")
+        if newline != -1:
+            raw = raw[newline + 1:].strip()
+        if raw.endswith("```"):
+            raw = raw[:-3].strip()
+
     if not raw:
         # Thinking trace consumed all tokens — capture it for diagnosis.
         thinking = (msg.get("reasoning_content") or "")
