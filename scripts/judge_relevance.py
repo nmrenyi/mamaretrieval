@@ -441,6 +441,14 @@ def _call_openai(
 
     msg    = response["choices"][0]["message"]
     raw    = (msg.get("content") or "").strip()
+
+    # When thinking_budget conflicts with --reasoning-parser qwen3, the <think>...</think>
+    # block can leak into content instead of being separated into reasoning_content.
+    # Strip it so json.loads sees only the actual JSON output.
+    if raw.startswith("<think>"):
+        end = raw.find("</think>")
+        raw = raw[end + len("</think>"):].strip() if end != -1 else ""
+
     if not raw:
         # Thinking trace consumed all tokens — capture it for diagnosis.
         thinking = (msg.get("reasoning_content") or "")
