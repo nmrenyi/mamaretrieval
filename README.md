@@ -458,7 +458,8 @@ Steps (full spec in `IMPLEMENTATION_GUIDE.md` §8 Phase 3):
 2. For those 30 queries, run ≥6 retrievers at top-20 each (add voyage-4-large
    for API best-overall, BGE-reranker for cross-encoder precision, LateOn for
    architectural diversity beyond the Phase 2a BM25/MedCPT/Octen set). Union
-   pools.
+   pools. **Cluster instructions for the BM25/MedCPT/Octen subset are in
+   [`AUDIT_RETRIEVAL_RUNBOOK.md`](AUDIT_RETRIEVAL_RUNBOOK.md).**
 3. LLM-judge every candidate with the same Phase 2b prompt.
 4. Hand-review all LLM-relevant labels plus a 20% random sample of
    LLM-not-relevant labels. Record final verdicts in
