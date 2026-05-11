@@ -43,7 +43,7 @@ mamaretrieval/
 │   ├── llm_filtered_chunks.jsonl   # chunks kept after LLM filtering
 │   ├── queries.jsonl               # output of generate_queries.py
 │   ├── candidates.jsonl            # output of pool_candidates.py
-│   ├── labels.jsonl                # output of judge_relevance.py
+│   ├── relevance_labels.jsonl      # output of judge_relevance.py
 │   └── audit/
 │       ├── query_ids.txt           # 30 selected audit query IDs (one per line)
 │       ├── labels_exhaustive.jsonl # exhaustive labels for the 30-query subset
@@ -51,7 +51,7 @@ mamaretrieval/
 └── releases/
     └── mamaretrieval-v1/
         ├── queries.jsonl           # copy of data/queries.jsonl
-        ├── labels.jsonl            # copy of data/labels.jsonl
+        ├── relevance_labels.jsonl  # copy of data/relevance_labels.jsonl
         └── manifest.json           # versioning metadata
 ```
 
@@ -247,35 +247,56 @@ One JSON object per query. Output of `pool_candidates.py`.
   "query_id": "q_0001",
   "query_text": "What dose of oxytocin do I give for active management of third stage?",
   "seed_chunk_id": "dcaeb591065c7c22",
+  "retrievers_used": ["bm25", "medcpt", "octen"],
   "candidates": [
-    {"chunk_id": "dcaeb591065c7c22", "source": "...", "text": "...", "retrievers": ["bm25", "dense"], "scores": {"bm25": 12.3, "dense": 0.87}},
-    {"chunk_id": "a1b2c3d4e5f60001", "source": "...", "text": "...", "retrievers": ["dense"], "scores": {"dense": 0.81}}
+    {
+      "chunk_id": "dcaeb591065c7c22",
+      "bm25_rank": 1,
+      "medcpt_rank": 1,
+      "octen_rank": 2,
+      "rrf_score": 0.048512,
+      "seed": true
+    },
+    {
+      "chunk_id": "a1b2c3d4e5f60001",
+      "bm25_rank": null,
+      "medcpt_rank": 3,
+      "octen_rank": 5,
+      "rrf_score": 0.022734,
+      "seed": false
+    }
   ]
 }
 ```
 
-`candidates` is the deduped union of top-k results across all retrievers. Each candidate records which retrievers surfaced it and their raw scores.
+`candidates` is the deduped union of top-k results across all retrievers, reordered by RRF score. Each candidate records its per-retriever rank (`null` if the retriever did not surface it) and the fused RRF score. The `seed` flag marks the chunk the query was generated from (force-included even if no retriever surfaced it). Chunk text is **not** duplicated into candidate records — fetch it from the corpus by `chunk_id` when needed.
 
-### `data/labels.jsonl`
-One JSON object per query. Output of `judge_relevance.py`.
+### `data/relevance_labels.jsonl`
+One JSON object per **(query_id, chunk_id) pair**. Output of `judge_relevance.py`.
 
 ```json
 {
-  "query_id": "q_0001",
-  "query_text": "What dose of oxytocin do I give for active management of third stage?",
-  "relevant_chunk_ids": ["dcaeb591065c7c22", "a1b2c3d4e5f60001"],
-  "partial_chunk_ids": ["ff00112233445566"],
-  "adjudication": {
-    "dcaeb591065c7c22": "fully",
-    "a1b2c3d4e5f60001": "fully",
-    "ff00112233445566": "partially"
-  }
+  "query_id": "q_01682",
+  "chunk_id": "61cdabfce6cd8a6f",
+  "reasoning": "The chunk directly addresses the topic of epidural analgesia contraindications ...",
+  "d1_topic": true,
+  "d2_meaningful": true,
+  "d3_actionable": false,
+  "score": 1,
+  "llm_model": "Qwen/Qwen3.5-397B-A17B-FP8",
+  "llm_judge_schema_version": "v-f20c636b",
+  "llm_judge_prompt_hash": "f36ff561215b3a6f",
+  "llm_backend": "openai"
 }
 ```
 
-`relevant_chunk_ids` = seed positive + all chunks labeled `fully` or `partially` relevant.
-`partial_chunk_ids` = subset labeled `partially` (informational; included in relevant_chunk_ids).
-`adjudication` = raw judge verdict per candidate for traceability.
+The label uses a 3-dimension rubric (D1 = topic match, D2 = meaningful clinical info, D3 = specific actionable guidance) combined into a graded score:
+
+```
+score = d1_topic × (d2_meaningful + d3_actionable)   ∈ {0, 1, 2}
+```
+
+Structural constraints enforced in post-processing: `D1=False` zeros D2/D3; `D3=True` implies `D2=True`. Verify with `scripts/verify_relevance_labels.py`. See `README.md` §Phase 2b for the rubric definition, research backing, and prompt design.
 
 ### `releases/mamaretrieval-v1/manifest.json`
 
@@ -557,51 +578,18 @@ Research basis:
 
 ### Phase 2b — `scripts/judge_relevance.py`
 
-**Purpose:** For each query, call an LLM to judge whether each candidate chunk is relevant. Produce final `relevant_chunk_ids` labels.
+**Purpose:** For each (query, candidate chunk) pair, call an LLM judge to assess relevance on three dimensions (D1 topic / D2 meaningful / D3 actionable) and emit a graded score.
 
-**Input:** `data/candidates.jsonl`, `config.yaml`
+**Input:** `data/candidates.jsonl`, corpus chunks, `config.yaml`
 
-**Output:** `data/labels.jsonl`
+**Output:** `data/relevance_labels.jsonl` (one record per `(query_id, chunk_id)` pair — schema in §5).
 
-**Calibration — do this first:**
-Before running at scale, manually label 50–100 (query, chunk) pairs as `fully / partially / not relevant`. Run the LLM judge on the same pairs. Compute agreement rate. Proceed only if agreement > 85%. If not, revise the judge prompt.
+> **Implemented.** The full rubric, prompt design, research backing, model
+> (`Qwen/Qwen3.5-397B-A17B-FP8`), schema enforcement, post-processing rules,
+> and results live in `README.md` §"Phase 2b — LLM Relevance Judging".
+> This guide section is kept as an index entry; do not re-derive the design here.
 
-**Judge prompt:**
-
-System:
-```
-You are a clinical relevance assessor for a medical retrieval benchmark.
-The benchmark is for a midwifery/nursing assistant in Zanzibar, Tanzania.
-```
-
-User:
-```
-Query: {query_text}
-
-Passage (chunk_id: {chunk_id}):
-{chunk_text}
-
-Does this passage answer the query?
-- "fully": the passage directly and completely answers the query.
-- "partially": the passage is relevant and provides useful information but
-  does not fully answer the query on its own.
-- "not": the passage is not relevant to the query.
-
-Reply with exactly one word: fully, partially, or not.
-```
-
-**Logic:**
-1. For each query in `data/candidates.jsonl`:
-   a. The seed chunk(s) are automatically labeled `fully` — do not call the LLM for them.
-   b. Call the LLM judge on all other candidates.
-   c. `relevant_chunk_ids` = seed chunk(s) + all chunks labeled `fully` or `partially`.
-2. Write one labels record to `data/labels.jsonl`.
-
-**Notes:**
-- Use `gpt-4o` (stronger model) for judging — quality matters here.
-- Write incrementally; skip already-judged queries on re-run (check if `query_id` already in output file).
-- Log total API calls and cost.
-- If LLM returns something other than `fully / partially / not`, log and default to `not`.
+**Calibration (deferred).** The original plan called for a >85% agreement check against 50–100 hand-labeled pairs before running at scale. That calibration was not performed; the Phase 3 completeness audit is the planned mitigation. If a future iteration re-runs Phase 2b with a different judge model or rubric, restore the calibration step.
 
 ---
 
@@ -609,7 +597,7 @@ Reply with exactly one word: fully, partially, or not.
 
 **Purpose:** Build a 30-query gold-standard subset with exhaustive labels. Compare against pipeline labels to validate label quality. Report the gap as the error bar on all retrieval scores.
 
-**Input:** `data/queries.jsonl`, `data/labels.jsonl`, corpus chunks, `config.yaml`
+**Input:** `data/queries.jsonl`, `data/relevance_labels.jsonl`, corpus chunks, `config.yaml`
 
 **Output:** `data/audit/query_ids.txt`, `data/audit/labels_exhaustive.jsonl`, `data/audit/results.md`
 
@@ -622,12 +610,12 @@ Stratified random sample: 2 per tier (very_high: 6, high: 4, moderate_high: 2, m
 For the 30 audit queries, run at minimum 6 retrievers (add alternative dense models, hybrid BM25+dense, a re-ranker if available) and retrieve top-20 from each. Union all results. This pool will be larger than Phase 2a's pool.
 
 **Step 3 — Exhaustive LLM judging.**
-Run the LLM judge on every candidate in the exhaustive pool (same prompt as Phase 2b). Then hand-review all LLM-relevant labels (fully or partially) plus a random sample of 20% of LLM-not-relevant labels. Record final human-adjudicated verdicts in `data/audit/labels_exhaustive.jsonl` (same schema as `data/labels.jsonl`).
+Run the LLM judge on every candidate in the exhaustive pool (same rubric as Phase 2b — see README §Phase 2b). Then hand-review all LLM-relevant labels (score ≥ 1) plus a random 20% sample of LLM-irrelevant labels (score = 0). Record final human-adjudicated verdicts in `data/audit/labels_exhaustive.jsonl` (same schema as `data/relevance_labels.jsonl`).
 
 **Step 4 — Compare and report.**
 For each of the 30 audit queries, score a reference retriever using:
 - (a) exhaustive labels
-- (b) pipeline labels from `data/labels.jsonl`
+- (b) pipeline labels from `data/relevance_labels.jsonl`
 
 Compute: Hit Rate@k, MRR, nDCG@10, Recall@5, Precision@5 for k in {1, 3, 5, 10}.
 
@@ -654,7 +642,7 @@ Once all phases are complete and the audit passes:
 
 1. Create `releases/mamaretrieval-v1/`.
 2. Copy `data/queries.jsonl` → `releases/mamaretrieval-v1/queries.jsonl`.
-3. Copy `data/labels.jsonl` → `releases/mamaretrieval-v1/labels.jsonl`.
+3. Copy `data/relevance_labels.jsonl` → `releases/mamaretrieval-v1/relevance_labels.jsonl`.
 4. Write `releases/mamaretrieval-v1/manifest.json` with:
    - `version`, `corpus_version` (read from mamai-medical-guidelines manifest at `releases/rag-bundle-v0.2.0/manifest.json`), `date`, `query_count`, `label_count`, `sources_sampled`, `notes`.
 
@@ -683,7 +671,7 @@ python scripts/sample_chunks.py      # → data/sampled_chunks.jsonl
 python scripts/llm_filter_chunks.py  # → data/llm_filtered_chunks.jsonl
 python scripts/generate_queries.py   # → data/queries.jsonl
 python scripts/pool_candidates.py    # → data/candidates.jsonl  (CPU-heavy, ~30 min)
-python scripts/judge_relevance.py    # → data/labels.jsonl  (~$20-40 GPT-4o)
+python scripts/judge_relevance.py    # → data/relevance_labels.jsonl  (local vLLM, free)
 python scripts/audit.py              # → data/audit/  (requires manual review step)
 ```
 

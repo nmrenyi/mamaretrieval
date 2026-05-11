@@ -29,6 +29,24 @@ python scripts/audit.py                  # Phase 3: completeness audit
 
 All pipeline outputs are written under `data/` and are gitignored.
 
+### Data artefacts
+
+One authoritative file per phase. Full schemas in `IMPLEMENTATION_GUIDE.md` §5.
+
+| File | Phase | Produced by | What it is |
+|------|-------|-------------|------------|
+| `data/sampled_chunks.jsonl` | 1a | `sample_chunks.py` | Tier-weighted sample of corpus chunks |
+| `data/llm_filter_results.jsonl` | 1b | `llm_filter_chunks.py` | Raw filter judgments (kept and rejected) |
+| `data/llm_filtered_chunks.jsonl` | 1b | `llm_filter_chunks.py` | Chunks that passed the clinical-relevance gate + seed query |
+| `data/queries.jsonl` | 1c | `generate_queries.py` | Final query records (one per `query_id`) |
+| `data/candidates.jsonl` | 2a | `pool_candidates.py` | One record per query — RRF-fused pool of retriever candidates |
+| `data/relevance_labels.jsonl` | 2b | `judge_relevance.py` | One record per `(query_id, chunk_id)` pair with D1/D2/D3 + score. **The benchmark's primary artefact.** Schema also in §Phase 2b below. |
+
+Other files under `data/`:
+
+- `queries_review.txt` — human-readable per-source query listing for spot-checking Phase 1 outputs (not consumed by downstream phases).
+- `qwen36_27b_fp8_shuffle50_seed42_thinking_<timestamp>/` — captured reasoning traces from the Phase 1b filter run, for audit / debugging only.
+
 ---
 
 ## Current Status
