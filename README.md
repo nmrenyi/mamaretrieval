@@ -31,21 +31,49 @@ All pipeline outputs are written under `data/` and are gitignored.
 
 ### Data artefacts
 
-One authoritative file per phase. Full schemas in `IMPLEMENTATION_GUIDE.md` §5.
+The pipeline is a funnel from the full corpus down to labeled (query, chunk) pairs:
 
-| File | Phase | Produced by | What it is |
-|------|-------|-------------|------------|
-| `data/sampled_chunks.jsonl` | 1a | `sample_chunks.py` | Tier-weighted sample of corpus chunks |
-| `data/llm_filter_results.jsonl` | 1b | `llm_filter_chunks.py` | Raw filter judgments (kept and rejected) |
-| `data/llm_filtered_chunks.jsonl` | 1b | `llm_filter_chunks.py` | Chunks that passed the clinical-relevance gate + seed query |
-| `data/queries.jsonl` | 1c | `generate_queries.py` | Final query records (one per `query_id`) |
-| `data/candidates.jsonl` | 2a | `pool_candidates.py` | One record per query — RRF-fused pool of retriever candidates |
-| `data/relevance_labels.jsonl` | 2b | `judge_relevance.py` | One record per `(query_id, chunk_id)` pair with D1/D2/D3 + score. **The benchmark's primary artefact.** Schema also in §Phase 2b below. |
+```
+63,650 chunks in the corpus
+   │  Phase 1a (sample)
+   ▼
+4,540 chunks                       → sampled_chunks.jsonl
+   │  Phase 1b (LLM filter + generate a question per kept chunk)
+   ▼
+3,185 kept (~70%)                  → llm_filter_results.jsonl, llm_filtered_chunks.jsonl
+   │  Phase 1c (package as query records)
+   ▼
+3,185 queries                      → queries.jsonl
+   │  Phase 2a (retrievers pool candidates)
+   ▼
+3,185 query records, ~25 candidates each (78,571 (query, chunk) pairs)
+                                   → candidates.jsonl
+   │  Phase 2b (LLM judges each pair)
+   ▼
+78,571 labeled pairs               → relevance_labels.jsonl
+```
 
-Other files under `data/`:
+| File | Rows | Phase | Produced by | What it is, in plain language |
+|------|-----:|-------|-------------|------------|
+| `data/sampled_chunks.jsonl` | 4,540 | 1a | `sample_chunks.py` | Chunks pulled from the 63,650-chunk corpus. Per-source quotas are proportional to each source's quality tier — a "Very High" source (e.g. MSF, Oxford Handbook) contributes ~4× as many chunks as a "Low-moderate" source. |
+| `data/llm_filter_results.jsonl` | 4,540 | 1b | `llm_filter_chunks.py` | The LLM's verdict for **every** sampled chunk. Qwen3.6-27B is asked "could a clinician answer a question from this chunk?" and "if so, write one specific clinical question". Includes both kept and rejected chunks. |
+| `data/llm_filtered_chunks.jsonl` | 3,185 | 1b | `llm_filter_chunks.py` | Just the chunks that passed the filter (~70%), with the LLM-generated question attached as `seed_query`. |
+| `data/queries.jsonl` | 3,185 | 1c | `generate_queries.py` | The kept chunks repackaged as query records with stable IDs (`q_00001`, …) and source/tier metadata. One row = one query. |
+| `data/candidates.jsonl` | 3,185 | 2a | `pool_candidates.py` | One record per query. Three retrievers (BM25, MedCPT, Octen) each return their top-10; the union (~25 unique chunks per query) goes here. Each candidate stores its rank under each retriever (`null` if that retriever didn't surface it), an RRF fusion score, and a `seed` flag for the chunk the query was generated from. Total across all queries: 78,571 (query, chunk) pairs to judge. |
+| `data/relevance_labels.jsonl` | 78,571 | 2b | `judge_relevance.py` | One row per (query, chunk) pair. Qwen3.5-397B labels each pair on three yes/no dimensions — **D1** (same topic?), **D2** (relevant clinical info?), **D3** (specific actionable guidance?) — and computes `score = D1 × (D2 + D3)` ∈ {0, 1, 2}. **The benchmark's primary artefact.** Full schema in §Phase 2b below. |
 
-- `queries_review.txt` — human-readable per-source query listing for spot-checking Phase 1 outputs (not consumed by downstream phases).
-- `qwen36_27b_fp8_shuffle50_seed42_thinking_<timestamp>/` — captured reasoning traces from the Phase 1b filter run, for audit / debugging only.
+Supporting files (not on the main pipeline path):
+
+- **`queries_review.txt`** — plain-text dump of all queries grouped by source, for human spot-checking that the generated questions look sensible.
+- **`qwen36_27b_fp8_shuffle50_seed42_thinking_<timestamp>/`** — saved `<think>...</think>` reasoning traces from the Phase 1b filter run, one file per chunk; kept for debugging / audit, not consumed downstream.
+
+Three things worth knowing:
+
+- The counts line up exactly through the funnel: 3,185 kept chunks = 3,185 queries = 3,185 candidate records, and 3,185 × ~24.7 candidates ≈ 78,571 labeled pairs. No silent drops.
+- The `rrf_score` field in `candidates.jsonl` is computed but no downstream code currently reads it. It's reserved for Phase 3 evaluation as a meta-retriever alongside BM25/MedCPT/Octen.
+- The Phase 1c spec defines three query types (`per_chunk`, `synthesis`, `adversarial`); in reality **only `per_chunk` queries were generated**. If synthesis or adversarial coverage matters for the evaluation, that's an open item.
+
+Full per-field schemas are in `IMPLEMENTATION_GUIDE.md` §5.
 
 ---
 
