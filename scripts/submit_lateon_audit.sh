@@ -21,6 +21,7 @@ DEVICE="${DEVICE:-cuda}"
 BATCH_SIZE="${BATCH_SIZE:-32}"
 TOP_K="${TOP_K:-20}"
 NODE_POOL="${NODE_POOL:-h100}"
+PYTHONUSERBASE_PATH="${PYTHONUSERBASE_PATH:-$REPO_DIR/python_user_lateon}"
 HF_API_KEY_FILE_AT="${HF_API_KEY_FILE_AT:-/lightscratch/users/yiren/keys/hf_key.txt}"
 
 LOCAL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -65,7 +66,7 @@ ssh "$SERVER" runai submit "$JOB_NAME" \
   -e TOP_K="$TOP_K" \
   -e HF_HOME="$REPO_DIR/hf_cache" \
   -e HF_API_KEY_FILE_AT="$HF_API_KEY_FILE_AT" \
-  -e PYTHONUSERBASE="$REPO_DIR/python_user" \
+  -e PYTHONUSERBASE="$PYTHONUSERBASE_PATH" \
   -e RUNAI_HOME="$REPO_DIR/runai_home" \
   -- bash "$REPO_DIR/scripts/run_lateon_audit_job.sh"
 

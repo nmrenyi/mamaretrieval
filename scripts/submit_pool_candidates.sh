@@ -27,6 +27,7 @@ OUTPUT_PATH="${OUTPUT_PATH:-}"
 BATCH_SIZE="${BATCH_SIZE:-64}"
 DEVICE="${DEVICE:-cuda}"
 CACHE_DIR="${CACHE_DIR:-$REPO_DIR/.cache}"
+PYTHONUSERBASE_PATH="${PYTHONUSERBASE_PATH:-$REPO_DIR/python_user_pool}"
 HF_API_KEY_FILE_AT="${HF_API_KEY_FILE_AT:-/lightscratch/users/yiren/keys/hf_key.txt}"
 
 LOCAL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -74,7 +75,7 @@ for shard in $(seq 0 $((SHARD_COUNT - 1))); do
     -e CACHE_DIR="$CACHE_DIR" \
     -e HF_HOME="$REPO_DIR/hf_cache" \
     -e HF_API_KEY_FILE_AT="$HF_API_KEY_FILE_AT" \
-    -e PYTHONUSERBASE="$REPO_DIR/python_user" \
+    -e PYTHONUSERBASE="$PYTHONUSERBASE_PATH" \
     -e RUNAI_HOME="$REPO_DIR/runai_home" \
     -- bash "$REPO_DIR/scripts/run_pool_candidates_job.sh"
   echo "  Submitted: $JOB_NAME"

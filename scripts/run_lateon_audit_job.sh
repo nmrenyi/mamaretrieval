@@ -39,21 +39,10 @@ fi
 cd "$REPO_DIR"
 mkdir -p logs data data/audit "$HOME" "$HF_HOME" "$PYTHONUSERBASE" "$(dirname "$INDEX_FOLDER")"
 
-python3 - <<'PY'
-import importlib.util, subprocess, sys
-needed = []
-for pkg, import_name in [
-    ("pylate", "pylate"),
-    ("pyyaml", "yaml"),
-]:
-    if importlib.util.find_spec(import_name) is None:
-        needed.append(pkg)
-if needed:
-    print(f"Installing: {needed}", flush=True)
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "--user", *needed])
-else:
-    print("All packages present.", flush=True)
-PY
+echo "Installing pylate + torchvision into $PYTHONUSERBASE..."
+echo "(pip resolves a coherent torch/torchvision pair, isolated from the cluster image's pre-installed torchvision so they share an ABI.)"
+python3 -m pip install --user --upgrade pylate torchvision pyyaml
+echo "pylate install done."
 
 echo "Starting LateOn audit retrieval..."
 python3 -u scripts/retrieve_lateon_audit.py \
