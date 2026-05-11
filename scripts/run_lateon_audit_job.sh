@@ -39,9 +39,9 @@ fi
 cd "$REPO_DIR"
 mkdir -p logs data data/audit "$HOME" "$HF_HOME" "$PYTHONUSERBASE" "$(dirname "$INDEX_FOLDER")"
 
-echo "Installing pylate + torchvision into $PYTHONUSERBASE..."
-echo "(pip resolves a coherent torch/torchvision pair, isolated from the cluster image's pre-installed torchvision so they share an ABI.)"
-python3 -m pip install --user --upgrade pylate torchvision pyyaml
+echo "Installing pylate + torchvision + transformers into $PYTHONUSERBASE..."
+echo "(pip resolves a coherent torch/torchvision/transformers set. transformers is force-upgraded so its modernbert module guards the flash_attn import — the image's older transformers imports flash_attn unconditionally, and flash_attn's C extension breaks under the new torch ABI.)"
+python3 -m pip install --user --upgrade pylate torchvision transformers pyyaml
 echo "pylate install done."
 
 echo "Starting LateOn audit retrieval..."
