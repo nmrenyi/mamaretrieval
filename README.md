@@ -33,7 +33,7 @@ All pipeline outputs are written under `data/` and are gitignored.
 
 ## Current Status
 
-**Phase 2b implemented** — relevance judge scripts ready to run on the cluster.
+**Phase 2b complete** — 78,571 (query, chunk) relevance labels generated and verified. Next: Phase 3 completeness audit.
 
 | Phase | Status |
 |-------|--------|
@@ -41,7 +41,7 @@ All pipeline outputs are written under `data/` and are gitignored.
 | 1b — LLM filtering + query generation | Done |
 | 1c — Assemble final query records | Done |
 | 2a — Retrieval candidate pooling | Done |
-| 2b — LLM relevance judging | Ready |
+| 2b — LLM relevance judging | Done |
 | 3 — Audit | Pending |
 
 ---
@@ -303,12 +303,21 @@ independently — no conditioning in the prompt.
 ### Running Phase 2b
 
 ```bash
-bash scripts/submit_judge_relevance.sh   # submit 5 parallel H100 jobs
+bash scripts/submit_judge_relevance.sh   # submit N parallel jobs (default 5, H100)
 ```
 
-Each job: 1× H100, 8 CPU, 96 GB RAM, `--shard INDEX 5`.
-Model: **Qwen3-32B** via vLLM (`--reasoning-parser qwen3`, `guided_json`).
-Expected wall time: ~2–3 h per shard (78,571 pairs / 5 shards × 8 workers).
+Each job: 8× GPUs (tensor-parallel), 16 CPU, 256 GB RAM, `--shard INDEX N`.
+Model: **`Qwen/Qwen3.5-397B-A17B-FP8`** via vLLM (`--reasoning-parser qwen3`, `guided_json`).
+
+The model occasionally emits two output artefacts that need stripping in
+post-processing before JSON parsing:
+
+- `<think>...</think>JSON` or orphaned `</think>JSON` — leaked thinking tokens
+- ```` ```json\n{...}\n``` ```` — markdown code-fence wrapping
+
+Both are handled in `judge_relevance.py` (`_parse_response`). If you change the
+judge model and start seeing JSON parse errors, check the `raw_repr` in the
+error record's `reasoning` field — a new leakage pattern may need handling.
 
 Monitor:
 
@@ -323,6 +332,119 @@ Merge after all shards complete:
 rsync -av light:/mnt/light/scratch/users/yiren/mamaretrieval/data/relevance_labels_shard*.jsonl data/
 cat data/relevance_labels_shard{0..4}.jsonl > data/relevance_labels.jsonl
 ```
+
+### Output schema
+
+`data/relevance_labels.jsonl` — one record per `(query_id, chunk_id)` pair:
+
+```json
+{
+  "query_id": "q_01682",
+  "chunk_id": "61cdabfce6cd8a6f",
+  "reasoning": "The chunk directly addresses ...",
+  "d1_topic": true,
+  "d2_meaningful": true,
+  "d3_actionable": false,
+  "score": 1,
+  "llm_model": "Qwen/Qwen3.5-397B-A17B-FP8",
+  "llm_judge_schema_version": "v-f20c636b",
+  "llm_judge_prompt_hash": "f36ff561215b3a6f",
+  "llm_backend": "openai"
+}
+```
+
+### Results
+
+| Metric | Value |
+|--------|-------|
+| (query, chunk) pairs labeled | 78,571 / 78,571 (100%) |
+| Unique queries | 3,185 |
+| Errors | 0 |
+| Duplicates | 0 |
+
+Score distribution:
+
+| Score | Count | % |
+|-------|------:|------:|
+| 0 (off-topic or no useful information) | 38,762 | 49.3% |
+| 1 (on-topic, background only) | 15,023 | 19.1% |
+| 2 (on-topic, actionable guidance) | 24,786 | 31.6% |
+
+The run spanned multiple sharded submissions across A100/H100/H200 nodes on
+the EPFL light cluster, with several mop-up rounds to label pairs that hit
+output-format errors before the post-processing fixes were in place.
+
+### Verification
+
+`scripts/verify_relevance_labels.py` checks every record against three
+invariants:
+
+- `score == d1_topic × (d2_meaningful + d3_actionable)`
+- `d1_topic == False → d2_meaningful == False, d3_actionable == False`
+- `d3_actionable == True → d2_meaningful == True`
+
+```bash
+python scripts/verify_relevance_labels.py
+```
+
+Exits non-zero on any violation. Last run: **78,571 records checked, 0 violations.**
+
+In addition, a 10-sample stratified manual spot check (3 each at scores 0/1/2,
+plus one seed-chunk reference case) found all judgments defensible — including
+nuanced cases such as drug-name collisions across different clinical contexts
+and mislabeled section headers that the model correctly read past. The
+upfront >85% agreement calibration against 50–100 human labels (originally
+planned) was deferred; the Phase 3 completeness audit is the planned
+mitigation.
+
+---
+
+## Phase 3 — Completeness Audit (next)
+
+Pipeline labels are produced by TREC-style pooling over a finite retriever
+set, so any relevant chunk the Phase 2a pool missed is silently lost. Phase 3
+measures the size of that gap on a 30-query gold subset.
+
+Steps (full spec in `IMPLEMENTATION_GUIDE.md` §8 Phase 3):
+
+1. Stratified random sample 30 queries — 2 per tier (very_high: 6, high: 4,
+   moderate_high: 2, moderate: 4, low_moderate: 2) plus random fill to 30.
+2. For those 30 queries, run ≥6 retrievers at top-20 each (add voyage-4-large
+   for API best-overall, BGE-reranker for cross-encoder precision, LateOn for
+   architectural diversity beyond the Phase 2a BM25/MedCPT/Octen set). Union
+   pools.
+3. LLM-judge every candidate with the same Phase 2b prompt.
+4. Hand-review all LLM-relevant labels plus a 20% random sample of
+   LLM-not-relevant labels. Record final verdicts in
+   `data/audit/labels_exhaustive.jsonl`.
+5. For each of the 30 audit queries, compute Hit Rate@k, MRR, nDCG@10,
+   Recall@5, Precision@5 (k ∈ {1, 3, 5, 10}) using (a) exhaustive labels and
+   (b) pipeline labels from `data/relevance_labels.jsonl`. Report the gap.
+
+**Acceptance:** gap < 2–3 pp on primary metrics (Hit Rate, MRR). Larger gap →
+increase `pool_candidates.py` top-k or improve the judge prompt before
+proceeding.
+
+### Metric choice under incomplete labels
+
+Lead with completeness-robust metrics; report the rest as secondary:
+
+- **Robust:** Hit Rate@k, MRR
+- **Moderately sensitive:** nDCG@k
+- **Most sensitive:** Recall@k, Precision@k
+
+Since pipeline labels are necessarily incomplete (pooled from a finite
+retriever set), absolute Recall/Precision numbers carry an error bar. Relative
+ordering across retrievers is more reliable than absolute values. Report the
+audit gap alongside the main retrieval scores — it is the error bar on all
+retrieval numbers.
+
+### Versioning
+
+The benchmark is tied to a specific corpus version. Corpus version and
+chunking scheme are coupled in the corpus repository, so
+`(corpus_version, queries, labels)` is the versioned artefact. If the corpus
+is updated, chunk IDs change and the entire labeling pipeline must be re-run.
 
 ---
 
