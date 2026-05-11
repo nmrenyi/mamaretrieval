@@ -29,7 +29,9 @@ JUDGE_TIMEOUT="${JUDGE_TIMEOUT:-1800}"
 SHARD_COUNT="${SHARD_COUNT:-5}"
 LIMIT="${LIMIT:-0}"
 INPUT_PATH="${INPUT_PATH:-data/candidates.jsonl}"
-OUTPUT_PATH="${OUTPUT_PATH:-}"
+OUTPUT_DIR="${OUTPUT_DIR:-data}"
+OUTPUT_PREFIX="${OUTPUT_PREFIX:-relevance_labels}"
+NODE_POOL="${NODE_POOL:-h100}"
 PYTHONUSERBASE_PATH="${PYTHONUSERBASE_PATH:-$REPO_DIR/python_user_judge}"
 HF_API_KEY_FILE_AT="${HF_API_KEY_FILE_AT:-/lightscratch/users/yiren/keys/hf_key.txt}"
 
@@ -61,7 +63,7 @@ for shard in $(seq 0 $((SHARD_COUNT - 1))); do
     --cpu 16 --cpu-limit 16 \
     --memory 256G --memory-limit 256G \
     --large-shm \
-    --node-pool h100 \
+    --node-pool "$NODE_POOL" \
     --project "$PROJECT" \
     --run-as-uid 296712 \
     --run-as-gid 84257 \
@@ -80,9 +82,10 @@ for shard in $(seq 0 $((SHARD_COUNT - 1))); do
     -e SHARD_COUNT="$SHARD_COUNT" \
     -e LIMIT="$LIMIT" \
     -e INPUT="$INPUT_PATH" \
-    -e OUTPUT="$OUTPUT_PATH" \
+    -e OUTPUT_DIR="$OUTPUT_DIR" \
+    -e OUTPUT_PREFIX="$OUTPUT_PREFIX" \
     -e HF_HOME="$REPO_DIR/hf_cache" \
-    -e PYTHONUSERBASE="$PYTHONUSERBASE_PATH" \
+    -e PYTHONUSERBASE="${PYTHONUSERBASE_PATH}_shard${shard}" \
     -e RUNAI_HOME="$REPO_DIR/runai_home" \
     -e HF_API_KEY_FILE_AT="$HF_API_KEY_FILE_AT" \
     -- bash "$REPO_DIR/scripts/run_judge_relevance_job.sh"

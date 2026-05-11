@@ -118,7 +118,10 @@ if [[ "$_vllm_ready" -eq 0 ]]; then
 fi
 
 INPUT="${INPUT:-data/candidates.jsonl}"
-OUTPUT="${OUTPUT:-data/relevance_labels_shard${SHARD_INDEX}.jsonl}"
+OUTPUT_DIR="${OUTPUT_DIR:-data}"
+OUTPUT_PREFIX="${OUTPUT_PREFIX:-relevance_labels}"
+OUTPUT="${OUTPUT:-${OUTPUT_DIR}/${OUTPUT_PREFIX}_shard${SHARD_INDEX}.jsonl}"
+mkdir -p "$OUTPUT_DIR"
 
 LIMIT_ARGS=()
 RESUME_ARGS=(--resume)
