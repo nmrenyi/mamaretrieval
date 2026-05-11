@@ -26,6 +26,7 @@ data/*thinking*/
 data/audit/*.jsonl
 data/audit/*.json
 data/audit/*.md
+!data/audit/README.md
 data/audit/query_ids.txt
 
 # Retrieval/index artifacts

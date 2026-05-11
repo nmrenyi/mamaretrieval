@@ -1,0 +1,91 @@
+# `data/audit/` — Phase 3 completeness audit artifacts
+
+Working files for the Phase 3 audit of the MAMARetrieval benchmark. See
+`/AUDIT_REPORT.md` at the repo root for the full report; this README is a
+file-by-file inventory so future-you can recognise what each output is and
+which script produced it.
+
+## Provenance — top-level pipeline
+
+```
+queries.jsonl (3,185)
+   │  scripts/sample_audit_queries.py
+   ▼
+query_ids.txt + sample_breakdown.json  (100 queries, tier-stratified)
+   │  scripts/retrieve_{bm25,medcpt,octen,voyage,lateon}_audit.py
+   │  (medcpt/octen via cluster — submit_pool_candidates.sh patched for audit)
+   ▼
+{bm25,medcpt,octen,voyage,lateon}_top20.jsonl   (5 per-retriever rankings)
+   │  scripts/build_audit_pool.py
+   ▼
+candidates_audit.jsonl + new_pairs_to_judge.jsonl
+   │  scripts/build_judge_input_audit.py
+   ▼
+candidates_audit_new_only.jsonl  (input for the judge)
+   │  scripts/{submit,run}_judge_relevance.sh
+   │  (cluster, 2 shards × 32 workers on H100)
+   ▼
+relevance_labels_audit_shard{0,1}.jsonl → relevance_labels_audit.jsonl  (3,939 labels)
+   │  scripts/audit_metrics.py
+   ▼
+results.md  + results.json   (recall numbers)
+   │  scripts/build_audit_review.py
+   ▼
+review_missed_{strict,lenient}.md   (manual review artifacts)
+```
+
+After the run, intermediates were cleaned up; the table below documents only the surviving artefacts. Everything except this README is gitignored.
+
+## File inventory
+
+| File | What it is | Producer | Schema |
+|---|---|---|---|
+| `query_ids.txt` | 100 audit query IDs (one per line, sorted), seed=42, Hamilton tier allocation with `low_moderate` floored to 1. | `sample_audit_queries.py` | one query_id per line |
+| `sample_breakdown.json` | Audit-sample manifest: tier_breakdown, source_breakdown, allocation method. | `sample_audit_queries.py` | JSON dict |
+| `bm25_top20.jsonl` | BM25-Okapi top-20 for each of the 100 audit queries. | `retrieve_bm25_audit.py` | `{query_id, retriever, top_k, results: [{chunk_id, rank, score}]}` |
+| `medcpt_top20.jsonl` | MedCPT-Query-Encoder top-20 (split out from the union candidates produced by `pool_candidates.py`). | `split_audit_candidates.py` | `{query_id, model, top_k, results: [{chunk_id, rank}]}` (no per-retriever score in the union output) |
+| `octen_top20.jsonl` | Octen-Embedding-8B top-20 (same source as MedCPT). | `split_audit_candidates.py` | same as medcpt_top20 |
+| `voyage_top20.jsonl` | voyage-4-large top-20 (2048-d FP32, asymmetric `input_type=query`). | `retrieve_voyage_audit.py` | `{query_id, model, output_dimension, top_k, results: [{chunk_id, rank, score}]}` |
+| `lateon_top20.jsonl` | LateOn (`lightonai/GTE-ModernColBERT-v1`) top-20, MaxSim retrieval over a PLAID index built on cluster. | `retrieve_lateon_audit.py` | `{query_id, model, top_k, results: [{chunk_id, rank, score}]}` |
+| `candidates_audit.jsonl` | 5-retriever **union pool** for the 100 audit queries: one record per query, each candidate annotates its per-retriever ranks plus `judged_in_phase2b` flag. 100 records, 6,335 unique (q,c) candidates total. | `build_audit_pool.py` | `{query_id, retrievers, n_candidates, candidates: [{chunk_id, ranks: {bm25,medcpt,octen,voyage,lateon}, judged_in_phase2b}]}` |
+| `relevance_labels_audit.jsonl` | Audit's LLM-judged labels for the 3,939 pairs not seen by Phase 2b. Same prompt, schema, and model (`Qwen/Qwen3.5-397B-A17B-FP8`) as Phase 2b. **The audit's primary output.** | `judge_relevance.py` (cluster) | identical to `data/relevance_labels.jsonl` rows — `{query_id, chunk_id, d1_topic, d2_meaningful, d3_actionable, score, reasoning, llm_*}` |
+| `results.md` | Headline recall numbers (variant A + per-retriever variant B). Human-readable. | `audit_metrics.py` | Markdown |
+| `results.json` | Same numbers as `results.md` plus per-query distributions for any follow-up drill-down. | `audit_metrics.py` | JSON dict |
+| `review_missed_strict.md` | One section per query listing every (chunk, judge reasoning) the audit found at score = 2 but Phase 2a missed. For human spot-checking the LLM judge's strict-relevance calls. 853 pairs across 94 queries. | `build_audit_review.py --threshold strict` | Markdown |
+| `review_missed_lenient.md` (optional, not built by default) | Same as above but for score ≥ 1. ~1,466 pairs. | `build_audit_review.py --threshold lenient` | Markdown |
+
+## How to rebuild from scratch
+
+Everything in this folder is fully reproducible from the scripts and the inputs (`data/queries.jsonl`, `data/relevance_labels.jsonl`, the corpus). To regenerate:
+
+```bash
+python scripts/sample_audit_queries.py
+python scripts/build_audit_queries_jsonl.py            # → data/queries_audit.jsonl (intermediate, gitignored)
+python scripts/retrieve_bm25_audit.py                  # local
+python scripts/retrieve_voyage_audit.py                # local, needs MAMAI_VOYAGE_API + .venv/bin/voyageai
+# medcpt + octen via cluster:
+SHARD_COUNT=1 JOB_PREFIX=mamaretrieval-pool-audit TOP_K=20 RETRIEVERS=medcpt,octen \
+  QUERIES_PATH=data/queries_audit.jsonl \
+  OUTPUT_PATH=data/candidates_audit_shard0.jsonl \
+  bash scripts/submit_pool_candidates.sh
+# then rsync candidates_audit_shard0.jsonl back and:
+python scripts/split_audit_candidates.py
+# lateon via cluster:
+bash scripts/submit_lateon_audit.sh
+# pool union + new-pairs list:
+python scripts/build_audit_pool.py
+python scripts/build_judge_input_audit.py
+# judge via cluster:
+SHARD_COUNT=2 JOB_PREFIX=mamaretrieval-judge-audit WORKERS=32 NODE_POOL=h100 \
+  INPUT_PATH=data/audit/candidates_audit_new_only.jsonl \
+  OUTPUT_DIR=data/audit OUTPUT_PREFIX=relevance_labels_audit \
+  PYTHONUSERBASE_PATH=/lightscratch/users/yiren/mamaretrieval/python_user_judge_audit \
+  bash scripts/submit_judge_relevance.sh
+# then rsync + merge shard files, then:
+python scripts/audit_metrics.py
+python scripts/build_audit_review.py --threshold strict
+```
+
+## Headline result
+
+Phase 2a's pool captures **~49% (lenient) / ~52% (strict)** of the truly-relevant chunks. About half the relevant material is missing from the released benchmark's labels for these 100 queries. See `/AUDIT_REPORT.md` for the full discussion and remediation options.

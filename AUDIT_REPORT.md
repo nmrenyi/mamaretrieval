@@ -1,0 +1,129 @@
+# MAMARetrieval — Phase 3 Audit Report
+
+The Phase 3 completeness audit asks: **on a 100-query subset, how much of the truly-relevant set did the benchmark's Phase 2a candidate pool actually capture?** Answer: about **half**. This document records the method and the numbers; the per-chunk evidence used to draw the conclusion lives in `data/audit/`.
+
+---
+
+## Method
+
+| Step | What | Output |
+|---|---|---|
+| 1 | Stratified random sample of 100 query IDs from the 3,185-query benchmark, proportional to the corpus tier distribution (Hamilton allocation, low-tier floor of 1). | `data/audit/query_ids.txt` |
+| 2 | Re-run BM25, MedCPT, Octen-Embedding-8B at top-20 (vs the top-10 used in Phase 2a). Add two retrievers absent from Phase 2a: **voyage-4-large** (API, MoE) at top-20, and **LateOn** (`lightonai/GTE-ModernColBERT-v1`, late-interaction) at top-20. | `data/audit/{bm25,medcpt,octen,voyage,lateon}_top20.jsonl` |
+| 3 | Union the 5 retrievers' top-20 per query, flag pairs already labeled in Phase 2b, produce a list of new `(query_id, chunk_id)` pairs to judge. | `data/audit/candidates_audit.jsonl`, 6,335 pairs total (37.7% overlap with Phase 2b) |
+| 4 | Run the Phase 2b LLM judge (Qwen3.5-397B-A17B-FP8, same prompt and schema) on the 3,948 new pairs, on 2 sharded H100 jobs (32 workers each). | `data/audit/relevance_labels_audit.jsonl`, 3,939 records (9 dropped: missing-from-corpus or parse) |
+| 5 | Treat the audit-augmented label set (Phase 2b labels for these 100 queries ∪ audit labels) as the closest-to-ground-truth reference. Compute recall: (a) of Phase 2a's pool overall, (b) of each retriever's top-k. | `data/audit/results.md`, `data/audit/results.json` |
+
+Total audit-augmented labels for the 100 queries: **6,400 (q,c) pairs**.
+
+Code: `scripts/sample_audit_queries.py`, `scripts/{retrieve_bm25,retrieve_voyage,retrieve_lateon}_audit.py`, `scripts/build_audit_pool.py`, `scripts/build_judge_input_audit.py`, `scripts/{submit,run}_judge_relevance.sh`, `scripts/audit_metrics.py`.
+
+---
+
+## Score distribution — audit-discovered chunks vs Phase 2b
+
+Chunks judged across the audit's 3,939 newly-labeled pairs:
+
+| Score | Count | % |
+|---|--:|--:|
+| 0 (off-topic / no clinical info) | 2,473 | 62.8% |
+| 1 (on-topic, background only) | 613 | 15.6% |
+| 2 (on-topic, actionable) | 853 | 21.7% |
+
+Phase 2b for reference: 49.3% / 19.1% / 31.6%. The audit pool skews more strongly toward score 0 — exactly what you'd expect, since voyage and LateOn surface chunks the original 3 retrievers missed, and those missed chunks are disproportionately weak matches.
+
+But **1,466 of the new pairs are still relevant (score ≥ 1)** — chunks the pipeline never saw. That is the recall gap signal.
+
+---
+
+## Headline — benchmark-pool recall
+
+Fraction of audit-augmented relevant chunks that Phase 2a's candidate pool (BM25+MedCPT+Octen union, top-10 each) actually surfaced as candidates:
+
+| Relevance threshold | Mean recall | Min | Max |
+|---|---:|---:|---:|
+| **Lenient (score ≥ 1, "on-topic")** | **0.488** | 0.270 | 1.000 |
+| **Strict (score = 2, "actionable")** | **0.518** | 0.000 | 1.000 |
+
+Phase 2a missed roughly **half** of the truly-relevant material on these 100 queries.
+
+Strict recall edging above lenient is intuitive in hindsight: actionable chunks (specific dosing, protocols, thresholds) have richer retrieval signal than background-only on-topic chunks, so the candidate pool finds them more reliably.
+
+---
+
+## Diagnostic — per-retriever recall@k
+
+Recall of each retriever's top-k against the audit-augmented relevant set.
+
+### Lenient (score ≥ 1)
+
+| Retriever | Recall@5 | Recall@10 | Recall@20 |
+|---|---:|---:|---:|
+| BM25 | 0.128 | 0.210 | 0.319 |
+| MedCPT | 0.100 | 0.161 | 0.259 |
+| Octen-8B | 0.205 | 0.344 | 0.554 |
+| **voyage-4-large** | **0.215** | **0.365** | **0.592** |
+| LateOn (ModernColBERT) | 0.190 | 0.297 | 0.475 |
+
+### Strict (score = 2)
+
+| Retriever | Recall@5 | Recall@10 | Recall@20 |
+|---|---:|---:|---:|
+| BM25 | 0.163 | 0.238 | 0.324 |
+| MedCPT | 0.097 | 0.154 | 0.241 |
+| Octen-8B | 0.277 | 0.425 | 0.624 |
+| **voyage-4-large** | **0.302** | **0.474** | **0.694** |
+| LateOn | 0.255 | 0.378 | 0.526 |
+
+Three things stand out:
+
+1. **voyage-4-large is the strongest single retriever** at every cutoff on both thresholds. Notably, voyage wasn't in Phase 2a — adding it would be the single highest-leverage change.
+2. **MedCPT is the worst retriever** despite being the only medical-specialised model. Surprising; suggests the medical-domain priors aren't matching how queries are phrased in this benchmark (LLM-generated, midwifery-flavoured).
+3. **No single retriever exceeds 70% recall@20.** The truly-relevant set is broad; the Phase 2a design of unioning multiple retrievers is correct in principle — the gap exists because the depth was too shallow (top-10) and the retriever set was too narrow.
+
+---
+
+## Caveats on "completeness"
+
+The audit treats its label set as ground truth, but the label set is itself a pool — chunks no retriever ranked in their top-20 were never judged. Concretely:
+
+- The reference covers chunks any of {BM25, MedCPT, Octen, voyage-4-large, LateOn} ranked in top-20.
+- Chunks no retriever surfaced are *not* judged and silently count as not-relevant.
+- The audit is therefore an under-estimate of the true gap, not an upper bound.
+
+Sample size is 100 queries (3.1% of the benchmark, stratified by tier). Per-tier confidence intervals widen at smaller tiers (`low_moderate` has only 1 query in the sample, `moderate_high` has 5). The headline number should be read with that in mind.
+
+---
+
+## What this means for the released benchmark
+
+The README's Phase 3 acceptance criterion was "gap < 2–3 pp on Hit Rate, MRR". We instead measured recall directly, and **the gap is order-of-magnitude larger than 2–3 pp** — Phase 2a's pool captures ~49% of relevant chunks, not ~97–98%.
+
+Three honest options:
+
+| Option | Cost | Expected lift |
+|---|---|---|
+| **Add voyage-4-large** to the Phase 2a retriever set, re-run on all 3,185 queries | one corpus embed (~$3.50 free-tier-covered) + a top-up judge run for new candidates | voyage's recall@20 is 0.59 (lenient); roughly +20 pp on benchmark recall |
+| **Increase Phase 2a top-k 10 → 20** (existing 3 retrievers) | re-run pool_candidates + top-up judge | unclear, but a meaningful slice of the gap is just "deeper top-k" rather than "different retriever" |
+| **Ship as-is and document the error bar** | zero | benchmark's recall numbers are known to be ~50% under-counts of relevant chunks; absolute recall numbers should be read with that caveat |
+
+A combined run (voyage @20 + Octen/MedCPT/BM25 @20) would likely lift pool-recall toward ~80%, but the marginal cost vs benefit becomes a judgment call.
+
+---
+
+## Manual review
+
+Per discussion, the strict (score = 2) recall numbers are the most consequential — these are the chunks with specific dosing / protocols / actionable guidance that the benchmark misses. The set is small enough to inspect: **~7–8 missed strict-relevant chunks per query** on average.
+
+`scripts/build_audit_review.py` produces `data/audit/review_missed_strict.md`, grouped by query, with chunk text and the judge's reasoning. This is the artifact for confirming whether the LLM judge's "score = 2" calls actually reflect actionable content the benchmark should have captured.
+
+---
+
+## Provenance
+
+- Audit-augmented labels: 6,400 (q,c) pairs for 100 queries.
+- Judge model: `Qwen/Qwen3.5-397B-A17B-FP8` (identical to Phase 2b).
+- Prompt hash: `f36ff561215b3a6f` (identical to Phase 2b — verified via `llm_judge_prompt_hash` field).
+- Schema version: `v-f20c636b` (identical to Phase 2b).
+
+Generated by `scripts/audit_metrics.py`; raw per-query numbers in `data/audit/results.json`.
