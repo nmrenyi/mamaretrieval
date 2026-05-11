@@ -23,6 +23,7 @@ SHARD_COUNT="${SHARD_COUNT:-5}"
 RETRIEVERS="${RETRIEVERS:-bm25,medcpt,octen}"
 TOP_K="${TOP_K:-10}"
 QUERIES_PATH="${QUERIES_PATH:-data/queries.jsonl}"
+OUTPUT_PATH="${OUTPUT_PATH:-}"
 BATCH_SIZE="${BATCH_SIZE:-64}"
 DEVICE="${DEVICE:-cuda}"
 CACHE_DIR="${CACHE_DIR:-$REPO_DIR/.cache}"
@@ -67,6 +68,7 @@ for shard in $(seq 0 $((SHARD_COUNT - 1))); do
     -e RETRIEVERS="$RETRIEVERS" \
     -e TOP_K="$TOP_K" \
     -e QUERIES_PATH="$QUERIES_PATH" \
+    -e OUTPUT_PATH="$OUTPUT_PATH" \
     -e BATCH_SIZE="$BATCH_SIZE" \
     -e DEVICE="$DEVICE" \
     -e CACHE_DIR="$CACHE_DIR" \
