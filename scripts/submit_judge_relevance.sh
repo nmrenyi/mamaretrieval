@@ -28,13 +28,16 @@ TEMPERATURE="${TEMPERATURE:-0.0}"
 JUDGE_TIMEOUT="${JUDGE_TIMEOUT:-1800}"
 SHARD_COUNT="${SHARD_COUNT:-5}"
 LIMIT="${LIMIT:-0}"
+INPUT_PATH="${INPUT_PATH:-data/candidates.jsonl}"
+OUTPUT_PATH="${OUTPUT_PATH:-}"
+PYTHONUSERBASE_PATH="${PYTHONUSERBASE_PATH:-$REPO_DIR/python_user_judge}"
 HF_API_KEY_FILE_AT="${HF_API_KEY_FILE_AT:-/lightscratch/users/yiren/keys/hf_key.txt}"
 
 LOCAL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVER_ROOT="$SERVER:$SERVER_SCRATCH"
 
-if [[ ! -f "$LOCAL_ROOT/data/candidates.jsonl" ]]; then
-  echo "ERROR: data/candidates.jsonl not found. Run Phase 2a first." >&2
+if [[ ! -f "$LOCAL_ROOT/$INPUT_PATH" ]]; then
+  echo "ERROR: $INPUT_PATH not found locally." >&2
   exit 1
 fi
 
@@ -43,8 +46,9 @@ ssh "$SERVER" "mkdir -p '$SERVER_SCRATCH/scripts' '$SERVER_SCRATCH/data' '$SERVE
 rsync -av --delete \
   --exclude="__pycache__/" \
   "$LOCAL_ROOT/scripts/" "$SERVER_ROOT/scripts/"
-rsync -av "$LOCAL_ROOT/config.yaml"           "$SERVER_ROOT/config.yaml"
-rsync -av "$LOCAL_ROOT/data/candidates.jsonl" "$SERVER_ROOT/data/candidates.jsonl"
+rsync -av "$LOCAL_ROOT/config.yaml" "$SERVER_ROOT/config.yaml"
+ssh "$SERVER" "mkdir -p '$SERVER_SCRATCH/$(dirname "$INPUT_PATH")'"
+rsync -av "$LOCAL_ROOT/$INPUT_PATH" "$SERVER_ROOT/$INPUT_PATH"
 
 echo "Submitting $SHARD_COUNT shard jobs..."
 for shard in $(seq 0 $((SHARD_COUNT - 1))); do
@@ -75,8 +79,10 @@ for shard in $(seq 0 $((SHARD_COUNT - 1))); do
     -e SHARD_INDEX="$shard" \
     -e SHARD_COUNT="$SHARD_COUNT" \
     -e LIMIT="$LIMIT" \
+    -e INPUT="$INPUT_PATH" \
+    -e OUTPUT="$OUTPUT_PATH" \
     -e HF_HOME="$REPO_DIR/hf_cache" \
-    -e PYTHONUSERBASE="$REPO_DIR/python_user" \
+    -e PYTHONUSERBASE="$PYTHONUSERBASE_PATH" \
     -e RUNAI_HOME="$REPO_DIR/runai_home" \
     -e HF_API_KEY_FILE_AT="$HF_API_KEY_FILE_AT" \
     -- bash "$REPO_DIR/scripts/run_judge_relevance_job.sh"
