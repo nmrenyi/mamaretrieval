@@ -12,6 +12,7 @@ REPO_DIR="${REPO_DIR:-/lightscratch/users/yiren/mamaretrieval}"
 CORPUS_PATH="${CORPUS_PATH:-/lightscratch/users/yiren/mamai-medical-guidelines/processed/chunks_for_rag.txt}"
 RETRIEVERS="${RETRIEVERS:-bm25,medcpt,octen}"
 TOP_K="${TOP_K:-10}"
+QUERIES_PATH="${QUERIES_PATH:-data/queries.jsonl}"
 BATCH_SIZE="${BATCH_SIZE:-64}"
 DEVICE="${DEVICE:-cuda}"
 CACHE_DIR="${CACHE_DIR:-$REPO_DIR/.cache}"
@@ -63,7 +64,7 @@ PY
 
 echo "Starting pool_candidates: shard ${SHARD_INDEX}/${SHARD_COUNT}"
 python3 -u scripts/pool_candidates.py \
-  --queries data/queries.jsonl \
+  --queries "$QUERIES_PATH" \
   --corpus "$CORPUS_PATH" \
   --output "data/candidates_shard${SHARD_INDEX}.jsonl" \
   --config config.yaml \

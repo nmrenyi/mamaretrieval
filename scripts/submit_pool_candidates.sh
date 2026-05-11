@@ -22,6 +22,7 @@ CORPUS_PATH="${CORPUS_PATH:-/lightscratch/users/yiren/mamai-medical-guidelines/p
 SHARD_COUNT="${SHARD_COUNT:-5}"
 RETRIEVERS="${RETRIEVERS:-bm25,medcpt,octen}"
 TOP_K="${TOP_K:-10}"
+QUERIES_PATH="${QUERIES_PATH:-data/queries.jsonl}"
 BATCH_SIZE="${BATCH_SIZE:-64}"
 DEVICE="${DEVICE:-cuda}"
 CACHE_DIR="${CACHE_DIR:-$REPO_DIR/.cache}"
@@ -30,8 +31,8 @@ HF_API_KEY_FILE_AT="${HF_API_KEY_FILE_AT:-/lightscratch/users/yiren/keys/hf_key.
 LOCAL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVER_ROOT="$SERVER:$SERVER_SCRATCH"
 
-if [[ ! -f "$LOCAL_ROOT/data/queries.jsonl" ]]; then
-  echo "ERROR: data/queries.jsonl not found. Run scripts/generate_queries.py first." >&2
+if [[ ! -f "$LOCAL_ROOT/$QUERIES_PATH" ]]; then
+  echo "ERROR: $QUERIES_PATH not found locally." >&2
   exit 1
 fi
 
@@ -41,7 +42,8 @@ rsync -av --delete \
   --exclude="__pycache__/" \
   "$LOCAL_ROOT/scripts/" "$SERVER_ROOT/scripts/"
 rsync -av "$LOCAL_ROOT/config.yaml" "$SERVER_ROOT/config.yaml"
-rsync -av "$LOCAL_ROOT/data/queries.jsonl" "$SERVER_ROOT/data/queries.jsonl"
+ssh "$SERVER" "mkdir -p '$SERVER_SCRATCH/$(dirname "$QUERIES_PATH")'"
+rsync -av "$LOCAL_ROOT/$QUERIES_PATH" "$SERVER_ROOT/$QUERIES_PATH"
 
 echo "Submitting $SHARD_COUNT shard jobs..."
 for shard in $(seq 0 $((SHARD_COUNT - 1))); do
@@ -64,6 +66,7 @@ for shard in $(seq 0 $((SHARD_COUNT - 1))); do
     -e SHARD_COUNT="$SHARD_COUNT" \
     -e RETRIEVERS="$RETRIEVERS" \
     -e TOP_K="$TOP_K" \
+    -e QUERIES_PATH="$QUERIES_PATH" \
     -e BATCH_SIZE="$BATCH_SIZE" \
     -e DEVICE="$DEVICE" \
     -e CACHE_DIR="$CACHE_DIR" \
