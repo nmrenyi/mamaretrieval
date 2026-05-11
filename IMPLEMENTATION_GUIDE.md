@@ -16,10 +16,9 @@ The evaluation methodology is bottom-up: retriever is validated first on mamaret
 
 ### Reference repositories
 
-Read both of these before implementing:
-
-- **`~/Downloads/mamai-mamabench-docs/`** — evaluation planning docs. Read `mamaretrieval.md` (benchmark spec), `mamai-quality-evaluation.md` (full evaluation protocol), and `mamai-quality-evaluation-minimal.md` (minimal version). These are the authoritative source of truth for methodology.
-- **`~/Downloads/mamai-medical-guidelines/`** — the production RAG corpus. Do NOT modify any files in this repo (another agent owns it). Read `README.md` for pipeline architecture, `processed/chunks_for_rag.txt` for the chunk data, and `source-research/rag-source-evaluation.md` for source relevance ratings used to drive sampling.
+- **This repository (`mamaretrieval`)** is the authoritative source for the benchmark itself — design decisions, prompts, schemas, executed results, and pipeline scripts all live here (this guide + `README.md`).
+- **`~/Downloads/mamai-mamabench-docs/`** — higher-level cross-evaluation strategy hub. `mamaretrieval.md` situates this benchmark within the broader MAMAI evaluation; `mamai-quality-evaluation*.md` describe the wider quality-evaluation context. Useful for orientation but not required for working in this repo.
+- **`~/Downloads/mamai-medical-guidelines/`** — the production RAG corpus. Do NOT modify any files in this repo (another agent owns it). Read its `README.md` for pipeline architecture, `processed/chunks_for_rag.txt` for the chunk data, and `source-research/rag-source-evaluation.md` for source relevance ratings used to drive sampling.
 
 ---
 
@@ -665,7 +664,7 @@ The `releases/mamaretrieval-v1/` directory is the artifact consumed by the evalu
 
 ## 10. Key design decisions (rationale)
 
-**No hand-written queries.** Hand-written queries were considered but skipped for resource reasons. Three mitigations are applied in the generation prompt: synthesis questions (cross-chunk), nurse voice (realistic phrasing), and adversarial reformulations covering abbreviations, typos, lay terminology, redundant context, ambiguity, multi-condition queries, negation, and rare exact terms. See `~/Downloads/mamai-mamabench-docs/mamaretrieval.md` for full rationale. Residual caveat: dense-retriever scores may be optimistic; lead with MRR and Hit Rate rather than Recall@k.
+**No hand-written queries.** Hand-written queries were considered but skipped for resource reasons. What is lost: a trusted calibration anchor for the completeness audit, multi-chunk synthesis coverage, and harder natural-language phrasing that levels the playing field between dense and sparse retrievers. Three mitigations are applied in the generation prompt: synthesis questions (cross-chunk), nurse voice (realistic phrasing), and adversarial reformulations covering abbreviations, typos, lay terminology, redundant context, ambiguity, multi-condition queries, negation, and rare exact terms. Residual caveat: LLM-generated questions are phrased similarly to chunk text, which can inflate dense-retriever scores; lead with MRR and Hit Rate rather than Recall@k.
 
 **Sampling only from rag-source-evaluation.md included sources.** The corpus contains 87 source PDFs but only 19 are sampled. Sources not covered by `~/Downloads/mamai-medical-guidelines/source-research/rag-source-evaluation.md` (including the core WHO/NICE/Tanzania clinical guidelines) are excluded from query generation for now. This keeps the benchmark focused on sources with explicit relevance ratings.
 
