@@ -2,7 +2,7 @@
 """Phase 3 audit — recall-gap metrics on the 100-query subset.
 
 Treats the audit-augmented label set (Phase 2b ∪ audit) as ground truth and
-computes two recall numbers:
+computes three recall numbers:
 
   Variant A (headline) — Benchmark-pool recall.
     Fraction of truly-relevant chunks that Phase 2a's candidate pool actually
@@ -14,7 +14,12 @@ computes two recall numbers:
     of truly-relevant chunks present in that retriever's top-k. Answers:
     "which retriever recovers more of the truth and at what depth?"
 
-Both variants are reported at two relevance thresholds:
+  Variant C (decomposition) — Union-pool recall by retriever-subset × k.
+    Recall of the union of N retrievers' top-k against the truly-relevant set,
+    sweeping retriever-subset and k together. Answers: "is the gap driven
+    by retriever choice (model-bounded) or candidate depth (top-k-bounded)?"
+
+All variants are reported at two relevance thresholds:
   - lenient: score ≥ 1 (on-topic, with or without actionable guidance)
   - strict:  score = 2 (actionable)
 
@@ -150,6 +155,42 @@ def main() -> int:
                 retriever_results[f"{label_name}@{k}"] = stats(recalls)
         variant_b[retriever] = retriever_results
 
+    # ──────── Variant C: union-pool recall (model-vs-k decomposition) ────────
+    # Same recall computation as Variant A, but the "pool" is rebuilt from the
+    # audit per-retriever rankings — so we can sweep retriever-subset and k.
+    # Lets us answer: is the benchmark's recall gap driven by retriever choice
+    # (model-bounded) or by candidate depth (top-k-bounded)?
+    ORIGINAL_3 = ["bm25", "medcpt", "octen"]
+    ALL_5 = list(PER_RETRIEVER_INPUTS)
+
+    def union_pool_recall(
+        retrievers: list[str], k: int, qid_relevant: dict[str, set[str]]
+    ) -> list[float]:
+        out = []
+        for qid in audit_qids:
+            rel = qid_relevant.get(qid, set())
+            if not rel:
+                continue
+            union: set[str] = set()
+            for retriever in retrievers:
+                union.update(per_retriever_ranks[retriever].get(qid, [])[:k])
+            out.append(len(union & rel) / len(rel))
+        return out
+
+    variant_c: dict[str, dict[str, dict | None]] = {}
+    for label, subset in [("3_retrievers_bm25+medcpt+octen", ORIGINAL_3),
+                          ("5_retrievers_all", ALL_5)]:
+        rows: dict[str, dict | None] = {}
+        for k in args.cutoffs:
+            for thresh_label, qid_rel in [
+                ("lenient_score>=1", qid_relevant_lenient),
+                ("strict_score==2",  qid_relevant_strict),
+            ]:
+                rows[f"{thresh_label}@{k}"] = stats(
+                    union_pool_recall(subset, k, qid_rel)
+                )
+        variant_c[label] = rows
+
     # ──────── Raw JSON ────────
     raw = {
         "audit_queries": len(audit_qids),
@@ -179,6 +220,7 @@ def main() -> int:
         "cutoffs": args.cutoffs,
         "variant_a_benchmark_pool": variant_a,
         "variant_b_per_retriever":  variant_b,
+        "variant_c_union_pool_by_subset_and_k": variant_c,
     }
     Path(args.raw).write_text(json.dumps(raw, indent=2))
     print(f"Raw results -> {args.raw}", flush=True)
@@ -232,6 +274,30 @@ def main() -> int:
             row = [retriever]
             for k in args.cutoffs:
                 row.append(fmt(variant_b[retriever].get(f"{label_name}@{k}")))
+            md.append("| " + " | ".join(row) + " |")
+        md.append("")
+    md.append("---")
+    md.append("")
+    md.append("## Variant C — Union-pool recall: model vs top-k decomposition")
+    md.append("")
+    md.append(
+        "Recall of the *union* of N retrievers' top-k against the audit-augmented "
+        "relevant set, sweeping retriever-subset × k. The 5-retriever @ top-20 "
+        "row is 1.000 by construction (it defines the reference). The other "
+        "rows isolate the lever: more retrievers (down a column) vs deeper k "
+        "(across a row)."
+    )
+    md.append("")
+    for thresh_label in ["lenient_score>=1", "strict_score==2"]:
+        md.append(f"### Threshold: `{thresh_label}`")
+        md.append("")
+        head = ["Retriever subset"] + [f"Union@{k}" for k in args.cutoffs]
+        md.append("| " + " | ".join(head) + " |")
+        md.append("|---" + "|---:" * len(args.cutoffs) + "|")
+        for subset_label in ["3_retrievers_bm25+medcpt+octen", "5_retrievers_all"]:
+            row = [subset_label]
+            for k in args.cutoffs:
+                row.append(fmt(variant_c[subset_label].get(f"{thresh_label}@{k}")))
             md.append("| " + " | ".join(row) + " |")
         md.append("")
     md.append("---")
