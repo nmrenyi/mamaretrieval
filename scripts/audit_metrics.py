@@ -232,6 +232,16 @@ def main() -> int:
     md = [
         "# Phase 3 audit — recall-gap results",
         "",
+        "> **Auto-generated** by `scripts/audit_metrics.py`. Numerical source of "
+        "truth for the audit. Re-run the script to regenerate; do not hand-edit.",
+        ">",
+        "> Companion files:",
+        "> - `/AUDIT_REPORT.md` (repo root, committed) — hand-written narrative, "
+        "method, interpretation, and remediation options.",
+        "> - `data/audit/review_missed_strict.md` — per-chunk evidence for the "
+        "853 strict-relevant pairs Phase 2a missed (chunk text + judge reasoning).",
+        "> - `data/audit/README.md` — full file inventory and rebuild recipe.",
+        "",
         f"Computed over **{len(audit_qids)} audit queries** with the audit-augmented label set treated as ground truth.",
         "",
         f"- Audit-augmented labels: **{len(augmented):,} (q,c) pairs** "

@@ -123,6 +123,18 @@ def main() -> int:
     md = [
         f"# Audit-discovered relevant chunks Phase 2a missed ({args.threshold})",
         "",
+        "> **Auto-generated** by `scripts/build_audit_review.py`. This is the "
+        "per-chunk evidence behind the audit's headline finding — open this "
+        "file to manually spot-check whether the LLM judge's relevance calls "
+        "actually reflect content the benchmark should have surfaced.",
+        ">",
+        "> Companion files:",
+        "> - `/AUDIT_REPORT.md` (repo root, committed) — hand-written narrative "
+        "and remediation options.",
+        "> - `data/audit/results.md` — aggregated recall numbers "
+        "(`scripts/audit_metrics.py`).",
+        "> - `data/audit/README.md` — full file inventory and rebuild recipe.",
+        "",
         f"Each entry = a (query, chunk) pair that the audit's LLM judge labelled "
         f"as {'actionable (score = 2)' if args.threshold == 'strict' else 'on-topic (score ≥ 1)'} "
         "but that Phase 2a's candidate pool did not include — so the released "
