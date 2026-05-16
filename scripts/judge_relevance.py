@@ -417,6 +417,32 @@ def _v2_apply_rules(d1: bool, d2: int, d3: int, d4: int) -> tuple[bool, int, int
     return d1, d2, d3, d4
 
 
+def _v2_safe_int(value: Any, default: int = 0) -> int:
+    """Tolerant int coercion for v2 dim parsing (no schema enforcement)."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        s = value.strip()
+        # Strip leading "score=", "D2=", etc., then keep just digits/sign
+        for prefix in ("score=", "score: ", "D2=", "D3=", "D4="):
+            if s.startswith(prefix):
+                s = s[len(prefix):]
+        try:
+            return int(s)
+        except ValueError:
+            try:
+                return int(float(s))
+            except ValueError:
+                return default
+    return default
+
+
 def _validate_v2_result(result: dict[str, Any]) -> V2JudgeResult:
     expected = set(V2JudgeResult.__annotations__)
     actual   = set(result.keys())
@@ -728,10 +754,18 @@ def _call_openai(
         ],
         "temperature":   temperature,
         "max_tokens":    max_tokens,
-        # vLLM extension: enforce JSON schema via guided decoding
-        "guided_json":   spec["json_schema"],
         "chat_template_kwargs": chat_template_kwargs,
     }
+    if rubric_name == "v1_boolean":
+        # Strict schema enforcement (legacy behavior).
+        payload["guided_json"] = spec["json_schema"]
+    else:
+        # v2_graded: drop guided_json so the model can think freely before
+        # emitting JSON. response_format=json_object loosely enforces "the
+        # output is a JSON object" without per-field schema constraints —
+        # enough to keep parsing robust while leaving room for the thinking
+        # trace to populate `reasoning_content`.
+        payload["response_format"] = {"type": "json_object"}
 
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -804,11 +838,11 @@ def _call_openai(
         })
         return result, None
 
-    # v2_graded
-    d1_raw = bool(parsed["d1_topic"])
-    d2_raw = int(parsed["d2_meaningful"])
-    d3_raw = int(parsed["d3_actionable"])
-    d4_raw = int(parsed["d4_density"])
+    # v2_graded — tolerant parsing (no schema enforcement)
+    d1_raw = bool(parsed.get("d1_topic", False))
+    d2_raw = _v2_safe_int(parsed.get("d2_meaningful"))
+    d3_raw = _v2_safe_int(parsed.get("d3_actionable"))
+    d4_raw = _v2_safe_int(parsed.get("d4_density"))
     d1_f, d2_f, d3_f, d4_f = _v2_apply_rules(d1_raw, d2_raw, d3_raw, d4_raw)
     result = _validate_v2_result({
         "query_id":                query_id,
@@ -896,11 +930,11 @@ def _call_ollama(
         })
         return result, None
 
-    # v2_graded
+    # v2_graded — tolerant parsing
     d1_raw = bool(parsed.get("d1_topic", False))
-    d2_raw = int(parsed.get("d2_meaningful", 0))
-    d3_raw = int(parsed.get("d3_actionable", 0))
-    d4_raw = int(parsed.get("d4_density", 0))
+    d2_raw = _v2_safe_int(parsed.get("d2_meaningful"))
+    d3_raw = _v2_safe_int(parsed.get("d3_actionable"))
+    d4_raw = _v2_safe_int(parsed.get("d4_density"))
     d1_f, d2_f, d3_f, d4_f = _v2_apply_rules(d1_raw, d2_raw, d3_raw, d4_raw)
     result = _validate_v2_result({
         "query_id":                query_id,
