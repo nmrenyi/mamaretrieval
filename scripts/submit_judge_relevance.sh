@@ -26,6 +26,7 @@ WORKERS="${WORKERS:-8}"
 MAX_TOKENS="${MAX_TOKENS:-30000}"
 TEMPERATURE="${TEMPERATURE:-0.0}"
 JUDGE_TIMEOUT="${JUDGE_TIMEOUT:-1800}"
+THINKING_BUDGET="${THINKING_BUDGET:-25000}"   # soft cap on thinking trace (chat_template_kwargs.thinking_budget)
 SHARD_COUNT="${SHARD_COUNT:-5}"
 LIMIT="${LIMIT:-0}"
 INPUT_PATH="${INPUT_PATH:-data/candidates.jsonl}"
@@ -80,6 +81,7 @@ for shard in $(seq 0 $((SHARD_COUNT - 1))); do
     -e MAX_TOKENS="$MAX_TOKENS" \
     -e TEMPERATURE="$TEMPERATURE" \
     -e JUDGE_TIMEOUT="$JUDGE_TIMEOUT" \
+    -e THINKING_BUDGET="$THINKING_BUDGET" \
     -e SHARD_INDEX="$shard" \
     -e SHARD_COUNT="$SHARD_COUNT" \
     -e LIMIT="$LIMIT" \

@@ -21,10 +21,13 @@ GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
 GDN_PREFILL_BACKEND="${GDN_PREFILL_BACKEND:-triton}"
 KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"
 WORKERS="${WORKERS:-8}"
-MAX_TOKENS="${MAX_TOKENS:-25000}"   # leaves >5k tokens headroom for prompt (default vLLM max_model_len = 32768)
+MAX_TOKENS="${MAX_TOKENS:-0}"        # 0 = omit; vLLM defaults to (max_model_len - input)
 TEMPERATURE="${TEMPERATURE:-0.0}"
 JUDGE_TIMEOUT="${JUDGE_TIMEOUT:-1800}"
-THINKING_BUDGET="${THINKING_BUDGET:-0}"
+# Soft cap on the Qwen3 thinking trace (chat_template_kwargs.thinking_budget).
+# 25k tokens = ~90% of the output budget after the v2.1 prompt + typical chunk,
+# leaving ~10% headroom for JSON output and safety.
+THINKING_BUDGET="${THINKING_BUDGET:-25000}"
 LIMIT="${LIMIT:-0}"
 RUBRIC="${RUBRIC:-v1_boolean}"   # v1_boolean (legacy) or v2_graded (Phase 4)
 RAW_OUTPUT="${RAW_OUTPUT:-}"     # path for raw-response side file (v2 only); empty = auto

@@ -790,9 +790,13 @@ def _call_openai(
             {"role": "user",   "content": user_content},
         ],
         "temperature":   temperature,
-        "max_tokens":    max_tokens,
         "chat_template_kwargs": chat_template_kwargs,
     }
+    # max_tokens=0 (or negative) → omit from request, let vLLM use
+    # the default (max_model_len - input_tokens). With thinking_budget
+    # set, runaway protection comes from there, not from max_tokens.
+    if max_tokens > 0:
+        payload["max_tokens"] = max_tokens
     if rubric_name == "v1_boolean":
         # Strict schema enforcement (legacy behavior).
         payload["guided_json"] = spec["json_schema"]
