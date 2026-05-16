@@ -29,6 +29,12 @@ data/audit/*.md
 !data/audit/README.md
 data/audit/query_ids.txt
 
+# Phase 4 per-retriever evaluation artifacts (regenerable)
+data/per_retriever/
+data/per_retriever_labels/
+# Raw-response side files from v2_graded judge runs (potentially large)
+*.raw.jsonl
+
 # Retrieval/index artifacts
 *.faiss
 *.index

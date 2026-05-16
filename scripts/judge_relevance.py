@@ -170,6 +170,293 @@ PROMPT_HASH = hashlib.sha256(
 
 
 # ---------------------------------------------------------------------------
+# V2 graded rubric — score = D1 × (D2 + D3 + D4), each dim 0-2; computed
+# downstream from the 4 dimensions (NOT emitted by the judge).
+# ---------------------------------------------------------------------------
+
+V2_SYSTEM_PROMPT = """\
+You are a clinical relevance judge for MAMAI, a RAG system serving midwives \
+and doctors in Zanzibar. Given a clinical query and a retrieved guideline \
+chunk, score the chunk on four dimensions. Think carefully, then emit JSON.
+
+────────────────────────────────────────────────────────────────────────
+D1 — Topic (boolean: true / false)
+────────────────────────────────────────────────────────────────────────
+Does this chunk address the same clinical problem as the query?
+
+  TRUE when the chunk concerns the SAME:
+    - condition, diagnosis, or syndrome the query asks about
+    - clinical event, complication, or procedure the query asks about
+    - drug or intervention the query asks about
+    - clinical timing/context (antenatal / intrapartum / postpartum /
+      neonatal) — a query about postpartum monitoring is NOT satisfied
+      by a chunk about antenatal monitoring of the same parameter.
+
+  FALSE when the chunk:
+    - covers a different condition, procedure, or clinical event
+    - covers the same parameter in a different timing/context window
+    - shares only a body system or patient population while addressing a
+      different clinical problem
+    - is pure metadata (TOC, references, learning objectives,
+      assessment / test rubrics, course-content outlines)
+
+  If D1 is FALSE, set D2 / D3 / D4 all to 0 and stop evaluating them.
+
+────────────────────────────────────────────────────────────────────────
+D2 — Meaningful clinical content (0 / 1 / 2)
+────────────────────────────────────────────────────────────────────────
+How rich is the chunk's clinical content (independent of whether it
+specifically answers the query)?
+
+  0 — no meaningful clinical content beyond a topic label:
+       section headers, page footers, TOC entries, references,
+       citations, learning objectives ("students should be able to..."),
+       administrative notes, supersession statements, cost / resource
+       text, assessment marking criteria, or one-line topic mentions
+       with no body.
+
+  1 — some clinical content; one or two clinical facts; brief background;
+       definition or peripheral mention; epidemiology / statistics
+       without management content; a single clinical principle stated.
+
+  2 — rich clinical content; multiple concepts developed in depth:
+       pathophysiology + risk factors + symptoms; formal recommendation
+       with indications; detailed mechanism explanation; substantive
+       clinical paragraph(s) with named entities and relationships.
+
+────────────────────────────────────────────────────────────────────────
+D3 — Actionable guidance (0 / 1 / 2)
+────────────────────────────────────────────────────────────────────────
+How specific is the actionable guidance a clinician could use directly?
+
+  0 — no actionable guidance:
+       pure background, definitions, pathophysiology, epidemiology,
+       references; or evidence-summary text that names doses studied
+       without making a recommendation.
+
+  1 — general or partial guidance; action specified but missing
+       specifics:
+       "give a uterotonic"; "monitor vital signs"; "consult an
+       obstetrician"; "massage the uterus"; "estimate blood loss";
+       "look for these signs" without thresholds; assess-and-record
+       statements; bullet-list of clinical signs without diagnostic
+       cutoffs.
+
+  2 — specific complete guidance: exact doses with route and frequency,
+       numeric thresholds with action triggers, full step-by-step
+       procedure with all steps specified, scheduled monitoring with
+       intervals:
+       "10 IU oxytocin IM immediately, then 5 IU/hr infusion for 4 hr";
+       "BP > 160/110 mmHg + platelets < 100 ×10⁹/L → severe pre-eclampsia
+       criteria";
+       "BP and pulse every 30 min, temperature every 4 hr";
+       "200 mg ferrous sulfate (65 mg elemental iron) + 400 µg folic
+       acid daily; may be replaced by 185 mg ferrous fumarate".
+
+  STRUCTURAL RULE: if you assign D3 ≥ 1, then D2 must be ≥ 1 — any
+  actionable clinical guidance carries some meaningful content. If you
+  find yourself wanting D3 ≥ 1 with D2 = 0, reconsider D2 (the guidance
+  itself IS clinical content).
+
+────────────────────────────────────────────────────────────────────────
+D4 — Density relative to THIS query (0 / 1 / 2)
+────────────────────────────────────────────────────────────────────────
+What fraction of the chunk text is directly useful for answering the
+specific query? (Not the broader topic — the specific query.)
+
+  0 — useful content is < 25% of the chunk:
+       long chunk with one buried relevant sentence; mostly off-topic
+       surrounding text; the answer exists somewhere but is dwarfed by
+       irrelevant procedural detail or related-but-not-query-specific
+       content.
+
+  1 — useful content is 25-75% of the chunk:
+       mixed — relevant content interleaved with adjacent-but-not-query-
+       specific material (e.g., the right protocol followed by a long
+       complications list when the query is about diagnosis only; useful
+       dosing followed by task-shifting / cost discussion).
+
+  2 — useful content is > 75% of the chunk:
+       focused — the chunk is essentially the answer plus minor
+       framing. Short focused chunks count as D4=2: signal-to-noise
+       from the LLM's point of view, not absolute length, is what
+       matters. A 50-character footnote that's 100% on the query is
+       D4=2; a 1500-character chunk that's 70% off-the-query is D4=1.
+
+  Note: D4 is judged AGAINST THE QUERY, not against the broader topic.
+  A chunk fully about postpartum monitoring is D4=2 only if the query
+  is also about postpartum monitoring. If the query is specifically
+  "how often to check BP", and the chunk also covers fundal height
+  and lochia at length, that's D4=1.
+
+────────────────────────────────────────────────────────────────────────
+Reasoning instruction
+────────────────────────────────────────────────────────────────────────
+Think carefully before producing the JSON output. Walk through each
+dimension in order (D1 → D2 → D3 → D4), referring to specific
+sentences or passages in the chunk where appropriate. Your reasoning
+trace is captured separately; do NOT embed it in the JSON.
+
+────────────────────────────────────────────────────────────────────────
+Output format
+────────────────────────────────────────────────────────────────────────
+After reasoning, respond with valid JSON only — no "score" field, no
+"reasoning" field; the score is computed downstream from D1 / D2 / D3 /
+D4 and the reasoning is captured in the raw response.
+
+{
+  "d1_topic": true,
+  "d2_meaningful": 2,
+  "d3_actionable": 2,
+  "d4_density": 2
+}
+
+────────────────────────────────────────────────────────────────────────
+Worked examples
+────────────────────────────────────────────────────────────────────────
+
+### Example 1
+Query: What are the alternative dosages for iron and folic acid supplementation?
+Chunk (WHO ANC 2016): "RECOMMENDATION A.2.1: Daily oral iron and folic acid \
+supplementation with 30 mg to 60 mg of elemental iron and 400 µg (0.4 mg) \
+folic acid is recommended for pregnant women to prevent maternal anaemia, \
+puerperal sepsis, low birth weight, and preterm birth."
+Expected JSON:
+{"d1_topic": true, "d2_meaningful": 2, "d3_actionable": 2, "d4_density": 2}
+
+### Example 2
+Query: What clinical signs and laboratory findings indicate severe \
+pre-eclampsia and HELLP syndrome?
+Chunk (midwifery-preparation-for-practice): "HELLP SYNDROME — HELLP syndrome \
+is a rare but life-threatening liver disorder thought to be a type of severe \
+preeclampsia. Characterised by Haemolysis (destruction of red blood cells), \
+Elevated Liver enzymes (indicating liver damage), and Low Platelet count. \
+Many hypotheses attempt to define the pathogenesis... Both HELLP and \
+preeclampsia occur during the later stages of pregnancy, and sometimes after \
+childbirth..."
+Expected JSON:
+{"d1_topic": true, "d2_meaningful": 2, "d3_actionable": 0, "d4_density": 2}
+
+### Example 3
+Query: How should a midwife assess and manage uterine tone during the third \
+stage of labour?
+Chunk (who-midwifery-education-modules-2): "CHECKLIST OF SUB-TASKS FOR THE \
+MANAGEMENT OF THE THIRD STAGE OF LABOUR | Sub-task: Ensure uterus well \
+contracted | Knowledge: Consistency of contracted uterus | Skill: Palpation \
+of uterus and massage to promote contraction | Attitudes: Accuracy, \
+Gentleness"
+Expected JSON:
+{"d1_topic": true, "d2_meaningful": 1, "d3_actionable": 1, "d4_density": 2}
+
+### Example 4
+Query: How often should maternal blood pressure, pulse, and temperature be \
+checked after birth?
+Chunk (hesperian-a-book-for-midwives Chapter 8 — Prenatal checkups): "How to \
+check blood pressure: The needle will begin to go back down. As the air leaks \
+out, you will start to hear the mother's pulse... Check the mother's blood \
+pressure at each visit. If her blood pressure is going up, ask her to come \
+back every week..."
+Expected JSON:
+{"d1_topic": false, "d2_meaningful": 0, "d3_actionable": 0, "d4_density": 0}"""
+
+
+V2_JUDGE_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "d1_topic":      {"type": "boolean"},
+        "d2_meaningful": {"type": "integer", "minimum": 0, "maximum": 2},
+        "d3_actionable": {"type": "integer", "minimum": 0, "maximum": 2},
+        "d4_density":    {"type": "integer", "minimum": 0, "maximum": 2},
+    },
+    "required": [
+        "d1_topic", "d2_meaningful", "d3_actionable", "d4_density",
+    ],
+    "additionalProperties": False,
+}
+
+
+class V2JudgeResult(TypedDict):
+    query_id:                str
+    chunk_id:                str
+    llm_judge_schema_version: str
+    llm_judge_prompt_hash:   str
+    llm_backend:             str
+    llm_model:               str
+    d1_topic:                bool
+    d2_meaningful:           int   # 0 / 1 / 2 — zeroed if d1_topic is False
+    d3_actionable:           int   # 0 / 1 / 2 — zeroed if d1_topic is False
+    d4_density:              int   # 0 / 1 / 2 — zeroed if d1_topic is False
+    _error:                  str   # empty string on success; error msg on failure
+
+
+V2_RESULT_SCHEMA_VERSION = "v-" + hashlib.sha256(
+    "\x00".join(sorted(V2JudgeResult.__annotations__)).encode()
+).hexdigest()[:8]
+
+V2_PROMPT_HASH = hashlib.sha256(
+    (V2_SYSTEM_PROMPT + "\x00" + _build_user_content(_SENTINEL_QUERY, _SENTINEL_CHUNK)
+     ).encode("utf-8")
+).hexdigest()[:16]
+
+
+def _v2_apply_rules(d1: bool, d2: int, d3: int, d4: int) -> tuple[bool, int, int, int]:
+    """Apply v2 structural rules.
+
+    Rules:
+      - D1=False → D2=D3=D4=0
+      - D3 >= 1 → bump D2 to 1 if D2=0 (actionable carries meaningful)
+      - All scores clamped to [0, 2]
+    """
+    if not d1:
+        return False, 0, 0, 0
+    d2 = max(0, min(2, d2))
+    d3 = max(0, min(2, d3))
+    d4 = max(0, min(2, d4))
+    if d3 >= 1 and d2 == 0:
+        d2 = 1
+    return d1, d2, d3, d4
+
+
+def _validate_v2_result(result: dict[str, Any]) -> V2JudgeResult:
+    expected = set(V2JudgeResult.__annotations__)
+    actual   = set(result.keys())
+    missing  = expected - actual
+    extra    = actual - expected
+    if missing or extra:
+        raise ValueError(
+            f"V2JudgeResult schema mismatch — missing: {missing}, extra: {extra}"
+        )
+    return result  # type: ignore[return-value]
+
+
+class V2RawCapture(TypedDict):
+    query_id:              str
+    chunk_id:              str
+    thinking:              str
+    raw_json:              str
+    llm_backend:           str
+    llm_model:             str
+    llm_judge_prompt_hash: str
+
+
+# Public dispatch table — keyed on --rubric value.
+RUBRICS: dict[str, dict[str, Any]] = {
+    "v1_boolean": {
+        "system_prompt":   SYSTEM_PROMPT,
+        "json_schema":     JUDGE_JSON_SCHEMA,
+        "prompt_hash":     PROMPT_HASH,
+        "schema_version":  RESULT_SCHEMA_VERSION,
+    },
+    "v2_graded": {
+        "system_prompt":   V2_SYSTEM_PROMPT,
+        "json_schema":     V2_JUDGE_JSON_SCHEMA,
+        "prompt_hash":     V2_PROMPT_HASH,
+        "schema_version":  V2_RESULT_SCHEMA_VERSION,
+    },
+}
+
+
+# ---------------------------------------------------------------------------
 # Corpus loading
 # ---------------------------------------------------------------------------
 
@@ -248,6 +535,15 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--output",  default=str(DEFAULT_OUTPUT),
                    help="Output JSONL: one record per (query, chunk) pair. "
                         "Default: %(default)s")
+    p.add_argument("--rubric", choices=["v1_boolean", "v2_graded"], default="v1_boolean",
+                   help="Rubric to use. v1_boolean: D1/D2/D3 booleans + score 0-2 "
+                        "(original Phase 2b/3). v2_graded: D1 boolean + D2/D3/D4 each "
+                        "0-2 (Phase 4 deployment-precision); score computed downstream. "
+                        "Default: %(default)s")
+    p.add_argument("--raw-output", default=None,
+                   help="Path for raw-response side file (v2 only). Captures the "
+                        "Qwen3 thinking trace and raw JSON per (q,c) pair. "
+                        "Default: <output>.raw.jsonl when --rubric=v2_graded.")
     p.add_argument("--backend", choices=["ollama", "openai"], default="ollama",
                    help="LLM serving backend. Use 'openai' for vLLM. Default: %(default)s")
     p.add_argument("--model",   default=None,
@@ -325,19 +621,27 @@ def _pair_key(query_id: str, chunk_id: str) -> str:
     return f"{query_id}::{chunk_id}"
 
 
-def _matches_contract(rec: dict[str, Any], backend: str, model: str) -> bool:
+def _matches_contract(rec: dict[str, Any], rubric_name: str, backend: str, model: str) -> bool:
+    spec = RUBRICS[rubric_name]
     return (
-        rec.get("llm_judge_schema_version") == RESULT_SCHEMA_VERSION
-        and rec.get("llm_judge_prompt_hash") == PROMPT_HASH
+        rec.get("llm_judge_schema_version") == spec["schema_version"]
+        and rec.get("llm_judge_prompt_hash") == spec["prompt_hash"]
         and rec.get("llm_backend") == backend
         and rec.get("llm_model") == model
     )
 
 
+def _is_successful_record(rec: dict[str, Any], rubric_name: str) -> bool:
+    """v1: score >= 0; v2: _error is the empty string."""
+    if rubric_name == "v1_boolean":
+        return rec.get("score", -1) >= 0
+    return rec.get("_error", "") == ""
+
+
 def _load_done_keys(
-    output_path: Path, backend: str, model: str
+    output_path: Path, rubric_name: str, backend: str, model: str
 ) -> tuple[set[str], int]:
-    """Return (done_keys, stale_count). Only successful labels (score >= 0) count."""
+    """Return (done_keys, stale_count). Only successful labels for the given rubric count."""
     if not output_path.exists():
         return set(), 0
     done: set[str] = set()
@@ -348,7 +652,7 @@ def _load_done_keys(
             if not line:
                 continue
             rec = json.loads(line)
-            if _matches_contract(rec, backend, model) and rec.get("score", -1) >= 0:
+            if _matches_contract(rec, rubric_name, backend, model) and _is_successful_record(rec, rubric_name):
                 done.add(_pair_key(rec["query_id"], rec["chunk_id"]))
             else:
                 stale += 1
@@ -395,6 +699,7 @@ def _call_openai(
     query_text:  str,
     chunk_id:    str,
     chunk:       dict[str, Any],
+    rubric_name: str,
     model:       str,
     base_url:    str,
     api_key:     str,
@@ -403,8 +708,13 @@ def _call_openai(
     temperature: float,
     think:            bool,
     thinking_budget:  int = 0,
-) -> JudgeResult:
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Returns (result_record, raw_capture_or_None).
+
+    raw_capture is only populated for rubric_name == 'v2_graded'.
+    """
     user_content = _build_user_content(query_text, chunk)
+    spec = RUBRICS[rubric_name]
 
     chat_template_kwargs: dict[str, Any] = {"enable_thinking": think}
     if think and thinking_budget > 0:
@@ -413,13 +723,13 @@ def _call_openai(
     payload: dict[str, Any] = {
         "model": model,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": spec["system_prompt"]},
             {"role": "user",   "content": user_content},
         ],
         "temperature":   temperature,
         "max_tokens":    max_tokens,
         # vLLM extension: enforce JSON schema via guided decoding
-        "guided_json":   JUDGE_JSON_SCHEMA,
+        "guided_json":   spec["json_schema"],
         "chat_template_kwargs": chat_template_kwargs,
     }
 
@@ -441,6 +751,7 @@ def _call_openai(
 
     msg    = response["choices"][0]["message"]
     raw    = (msg.get("content") or "").strip()
+    thinking = (msg.get("reasoning_content") or "")
 
     # The reasoning parser may leak think tokens into content in two ways:
     #   (a) full block: <think>...</think>JSON  — strip the whole block
@@ -460,9 +771,7 @@ def _call_openai(
             raw = raw[:-3].strip()
 
     if not raw:
-        # Thinking trace consumed all tokens — capture it for diagnosis.
-        thinking = (msg.get("reasoning_content") or "")
-        snippet  = thinking[:3000] if thinking else "(no reasoning_content in response)"
+        snippet = thinking[:3000] if thinking else "(no reasoning_content in response)"
         raise json.JSONDecodeError(
             f"Empty content after thinking. reasoning_content[:3000]:\n{snippet}",
             "", 0,
@@ -475,24 +784,55 @@ def _call_openai(
             raw, _je.pos,
         ) from _je
 
-    d1 = bool(parsed["d1_topic"])
-    d2 = bool(parsed["d2_meaningful"])
-    d3 = bool(parsed["d3_actionable"])
-    d2_final, d3_final, score = _compute_score(d1, d2, d3)
+    if rubric_name == "v1_boolean":
+        d1 = bool(parsed["d1_topic"])
+        d2 = bool(parsed["d2_meaningful"])
+        d3 = bool(parsed["d3_actionable"])
+        d2_final, d3_final, score = _compute_score(d1, d2, d3)
+        result = _validate_result({
+            "query_id":                query_id,
+            "chunk_id":                chunk_id,
+            "llm_judge_schema_version": RESULT_SCHEMA_VERSION,
+            "llm_judge_prompt_hash":   PROMPT_HASH,
+            "llm_backend":             "openai",
+            "llm_model":               model,
+            "reasoning":               str(parsed.get("reasoning", "")),
+            "d1_topic":                d1,
+            "d2_meaningful":           d2_final,
+            "d3_actionable":           d3_final,
+            "score":                   score,
+        })
+        return result, None
 
-    return _validate_result({
+    # v2_graded
+    d1_raw = bool(parsed["d1_topic"])
+    d2_raw = int(parsed["d2_meaningful"])
+    d3_raw = int(parsed["d3_actionable"])
+    d4_raw = int(parsed["d4_density"])
+    d1_f, d2_f, d3_f, d4_f = _v2_apply_rules(d1_raw, d2_raw, d3_raw, d4_raw)
+    result = _validate_v2_result({
         "query_id":                query_id,
         "chunk_id":                chunk_id,
-        "llm_judge_schema_version": RESULT_SCHEMA_VERSION,
-        "llm_judge_prompt_hash":   PROMPT_HASH,
+        "llm_judge_schema_version": V2_RESULT_SCHEMA_VERSION,
+        "llm_judge_prompt_hash":   V2_PROMPT_HASH,
         "llm_backend":             "openai",
         "llm_model":               model,
-        "reasoning":               str(parsed.get("reasoning", "")),
-        "d1_topic":                d1,
-        "d2_meaningful":           d2_final,
-        "d3_actionable":           d3_final,
-        "score":                   score,
+        "d1_topic":                d1_f,
+        "d2_meaningful":           d2_f,
+        "d3_actionable":           d3_f,
+        "d4_density":              d4_f,
+        "_error":                  "",
     })
+    raw_capture = {
+        "query_id":              query_id,
+        "chunk_id":              chunk_id,
+        "thinking":              thinking,
+        "raw_json":              raw,
+        "llm_backend":           "openai",
+        "llm_model":             model,
+        "llm_judge_prompt_hash": V2_PROMPT_HASH,
+    }
+    return result, raw_capture
 
 
 def _call_ollama(
@@ -500,19 +840,21 @@ def _call_ollama(
     query_text:  str,
     chunk_id:    str,
     chunk:       dict[str, Any],
+    rubric_name: str,
     model:       str,
     url:         str,
     timeout:     int,
     max_tokens:  int,
     temperature: float,
     think:       bool,
-) -> JudgeResult:
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     user_content = _build_user_content(query_text, chunk)
+    spec = RUBRICS[rubric_name]
 
     payload = json.dumps({
         "model": model,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": spec["system_prompt"]},
             {"role": "user",   "content": user_content},
         ],
         "stream": False,
@@ -530,27 +872,59 @@ def _call_ollama(
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         response = json.loads(resp.read())
 
-    raw    = response["message"]["content"].strip()
-    parsed = json.loads(raw)
+    raw      = response["message"]["content"].strip()
+    thinking = response["message"].get("thinking", "") or ""
+    parsed   = json.loads(raw)
 
-    d1 = bool(parsed.get("d1_topic",     False))
-    d2 = bool(parsed.get("d2_meaningful", False))
-    d3 = bool(parsed.get("d3_actionable", False))
-    d2_final, d3_final, score = _compute_score(d1, d2, d3)
+    if rubric_name == "v1_boolean":
+        d1 = bool(parsed.get("d1_topic",     False))
+        d2 = bool(parsed.get("d2_meaningful", False))
+        d3 = bool(parsed.get("d3_actionable", False))
+        d2_final, d3_final, score = _compute_score(d1, d2, d3)
+        result = _validate_result({
+            "query_id":                query_id,
+            "chunk_id":                chunk_id,
+            "llm_judge_schema_version": RESULT_SCHEMA_VERSION,
+            "llm_judge_prompt_hash":   PROMPT_HASH,
+            "llm_backend":             "ollama",
+            "llm_model":               model,
+            "reasoning":               str(parsed.get("reasoning", "")),
+            "d1_topic":                d1,
+            "d2_meaningful":           d2_final,
+            "d3_actionable":           d3_final,
+            "score":                   score,
+        })
+        return result, None
 
-    return _validate_result({
+    # v2_graded
+    d1_raw = bool(parsed.get("d1_topic", False))
+    d2_raw = int(parsed.get("d2_meaningful", 0))
+    d3_raw = int(parsed.get("d3_actionable", 0))
+    d4_raw = int(parsed.get("d4_density", 0))
+    d1_f, d2_f, d3_f, d4_f = _v2_apply_rules(d1_raw, d2_raw, d3_raw, d4_raw)
+    result = _validate_v2_result({
         "query_id":                query_id,
         "chunk_id":                chunk_id,
-        "llm_judge_schema_version": RESULT_SCHEMA_VERSION,
-        "llm_judge_prompt_hash":   PROMPT_HASH,
+        "llm_judge_schema_version": V2_RESULT_SCHEMA_VERSION,
+        "llm_judge_prompt_hash":   V2_PROMPT_HASH,
         "llm_backend":             "ollama",
         "llm_model":               model,
-        "reasoning":               str(parsed.get("reasoning", "")),
-        "d1_topic":                d1,
-        "d2_meaningful":           d2_final,
-        "d3_actionable":           d3_final,
-        "score":                   score,
+        "d1_topic":                d1_f,
+        "d2_meaningful":           d2_f,
+        "d3_actionable":           d3_f,
+        "d4_density":              d4_f,
+        "_error":                  "",
     })
+    raw_capture = {
+        "query_id":              query_id,
+        "chunk_id":              chunk_id,
+        "thinking":              thinking,
+        "raw_json":              raw,
+        "llm_backend":           "ollama",
+        "llm_model":             model,
+        "llm_judge_prompt_hash": V2_PROMPT_HASH,
+    }
+    return result, raw_capture
 
 
 def _process_one(
@@ -558,6 +932,7 @@ def _process_one(
     query_text:  str,
     chunk_id:    str,
     chunk:       dict[str, Any],
+    rubric_name: str,
     backend:     str,
     model:       str,
     ollama_url:  str,
@@ -569,19 +944,23 @@ def _process_one(
     think:            bool,
     thinking_budget:  int = 0,
     retries:          int = 2,
-) -> JudgeResult:
-    """Judge one pair, retrying transient errors up to `retries` times."""
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Judge one pair, retrying transient errors up to `retries` times.
+
+    Returns (result_record, raw_capture_or_None). raw_capture is only
+    populated for rubric_name == 'v2_graded'.
+    """
     last_err: Exception | None = None
     for attempt in range(retries + 1):
         try:
             if backend == "openai":
                 return _call_openai(
-                    query_id, query_text, chunk_id, chunk,
+                    query_id, query_text, chunk_id, chunk, rubric_name,
                     model, base_url, api_key, timeout, max_tokens, temperature, think,
                     thinking_budget,
                 )
             return _call_ollama(
-                query_id, query_text, chunk_id, chunk,
+                query_id, query_text, chunk_id, chunk, rubric_name,
                 model, ollama_url, timeout, max_tokens, temperature, think,
             )
         except (json.JSONDecodeError, KeyError) as exc:
@@ -592,19 +971,36 @@ def _process_one(
             if attempt < retries:
                 time.sleep(2 ** attempt)
 
-    return _validate_result({
+    err_msg = f"error: {type(last_err).__name__}: {last_err}"
+    if rubric_name == "v1_boolean":
+        return _validate_result({
+            "query_id":                query_id,
+            "chunk_id":                chunk_id,
+            "llm_judge_schema_version": RESULT_SCHEMA_VERSION,
+            "llm_judge_prompt_hash":   PROMPT_HASH,
+            "llm_backend":             backend,
+            "llm_model":               model,
+            "reasoning":               err_msg,
+            "d1_topic":                False,
+            "d2_meaningful":           False,
+            "d3_actionable":           False,
+            "score":                   -1,
+        }), None
+
+    # v2_graded error record
+    return _validate_v2_result({
         "query_id":                query_id,
         "chunk_id":                chunk_id,
-        "llm_judge_schema_version": RESULT_SCHEMA_VERSION,
-        "llm_judge_prompt_hash":   PROMPT_HASH,
+        "llm_judge_schema_version": V2_RESULT_SCHEMA_VERSION,
+        "llm_judge_prompt_hash":   V2_PROMPT_HASH,
         "llm_backend":             backend,
         "llm_model":               model,
-        "reasoning":               f"error: {type(last_err).__name__}: {last_err}",
         "d1_topic":                False,
-        "d2_meaningful":           False,
-        "d3_actionable":           False,
-        "score":                   -1,
-    })
+        "d2_meaningful":           0,
+        "d3_actionable":           0,
+        "d4_density":              0,
+        "_error":                  err_msg,
+    }), None
 
 
 # ---------------------------------------------------------------------------
@@ -674,7 +1070,7 @@ def main() -> int:
     # Load already-labeled pairs for --resume
     done_keys: set[str] = set()
     if args.resume:
-        done_keys, stale = _load_done_keys(output_path, args.backend, model)
+        done_keys, stale = _load_done_keys(output_path, args.rubric, args.backend, model)
         print(f"Resuming: {len(done_keys):,} pairs already labeled.")
         if stale:
             print(f"  {stale:,} stale / errored records will be re-processed.")
@@ -705,33 +1101,60 @@ def main() -> int:
         return 0
 
     print(
-        f"Processing {len(todo):,} pairs | "
+        f"Processing {len(todo):,} pairs | rubric={args.rubric} "
         f"backend={args.backend} model={model} workers={args.workers} "
         f"timeout={args.timeout}s max_tokens={args.max_tokens} "
         f"temperature={args.temperature} think={not args.no_think}"
     )
     print(f"Output → {output_path}")
 
+    # Resolve raw-output path (v2 only)
+    raw_path: Path | None = None
+    if args.rubric == "v2_graded":
+        raw_path = Path(args.raw_output) if args.raw_output else output_path.with_suffix(".raw.jsonl")
+        print(f"Raw responses → {raw_path}")
+
     # --- Run ---
     out_lock     = Lock()
-    score_counts: dict[int, int] = {0: 0, 1: 0, 2: 0}
+    raw_lock     = Lock()
+    # v1 has 3 score buckets (0/1/2); v2 has 7 (0..6 computed downstream from D1*(D2+D3+D4))
+    score_counts: dict[int, int] = {k: 0 for k in (range(3) if args.rubric == "v1_boolean" else range(7))}
     errors       = 0
     start_time   = time.monotonic()
 
     out_mode = "a" if args.resume else "w"
     out_fh   = output_path.open(out_mode, encoding="utf-8")
+    raw_fh   = raw_path.open(out_mode, encoding="utf-8") if raw_path else None
 
-    def _on_done(result: JudgeResult) -> None:
+    def _on_done(item: tuple[dict[str, Any], dict[str, Any] | None]) -> None:
         nonlocal errors
+        result, raw_capture = item
 
         with out_lock:
             out_fh.write(json.dumps(result) + "\n")
             out_fh.flush()
 
-        if result["score"] < 0:
+        if raw_capture is not None and raw_fh is not None:
+            with raw_lock:
+                raw_fh.write(json.dumps(raw_capture) + "\n")
+                raw_fh.flush()
+
+        # Compute display score
+        if args.rubric == "v1_boolean":
+            is_err = result.get("score", -1) < 0
+            disp_score = result.get("score", -1)
+        else:
+            is_err = result.get("_error", "") != ""
+            d1 = bool(result.get("d1_topic", False))
+            disp_score = (
+                (int(result["d2_meaningful"]) + int(result["d3_actionable"]) + int(result["d4_density"]))
+                if d1 else 0
+            )
+
+        if is_err:
             errors += 1
         else:
-            score_counts[result["score"]] += 1
+            score_counts[disp_score] = score_counts.get(disp_score, 0) + 1
 
         total   = sum(score_counts.values()) + errors
         elapsed = time.monotonic() - start_time
@@ -739,7 +1162,7 @@ def main() -> int:
         eta     = (len(todo) - total) / rate if rate > 0 else float("inf")
         eta_str = f"{eta / 60:.0f}m" if eta < 7200 else f"{eta / 3600:.1f}h"
 
-        status  = "ERR" if result["score"] < 0 else f"s={result['score']}"
+        status  = "ERR" if is_err else f"s={disp_score}"
         dist    = " ".join(f"{k}:{v}" for k, v in sorted(score_counts.items()))
         print(
             f"[{total:>6}/{len(todo)}] {status} | "
@@ -754,6 +1177,7 @@ def main() -> int:
                 pool.submit(
                     _process_one,
                     qid, qtext, cid, corpus[cid],
+                    args.rubric,
                     args.backend, model,
                     args.ollama_url, args.base_url, args.api_key,
                     args.timeout, args.max_tokens, args.temperature,
@@ -765,6 +1189,8 @@ def main() -> int:
                 _on_done(future.result())
     finally:
         out_fh.close()
+        if raw_fh is not None:
+            raw_fh.close()
 
     elapsed = time.monotonic() - start_time
     total   = sum(score_counts.values()) + errors
@@ -784,9 +1210,9 @@ def main() -> int:
                 if not line:
                     continue
                 rec = json.loads(line)
-                if not _matches_contract(rec, args.backend, model):
+                if not _matches_contract(rec, args.rubric, args.backend, model):
                     continue
-                if rec.get("score", -1) < 0:
+                if not _is_successful_record(rec, args.rubric):
                     error_records.append(rec)
                     continue
                 key = _pair_key(rec["query_id"], rec["chunk_id"])

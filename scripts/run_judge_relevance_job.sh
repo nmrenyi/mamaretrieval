@@ -26,6 +26,8 @@ TEMPERATURE="${TEMPERATURE:-0.0}"
 JUDGE_TIMEOUT="${JUDGE_TIMEOUT:-1800}"
 THINKING_BUDGET="${THINKING_BUDGET:-0}"
 LIMIT="${LIMIT:-0}"
+RUBRIC="${RUBRIC:-v1_boolean}"   # v1_boolean (legacy) or v2_graded (Phase 4)
+RAW_OUTPUT="${RAW_OUTPUT:-}"     # path for raw-response side file (v2 only); empty = auto
 
 : "${SHARD_INDEX:?ERROR: SHARD_INDEX must be set}"
 : "${SHARD_COUNT:?ERROR: SHARD_COUNT must be set}"
@@ -131,7 +133,7 @@ if [[ "$LIMIT" -gt 0 ]]; then
   echo "Test mode: limiting to $LIMIT queries (shuffled), no dedup."
 fi
 
-echo "Starting relevance judge: shard ${SHARD_INDEX}/${SHARD_COUNT}, workers=${WORKERS}"
+echo "Starting relevance judge: shard ${SHARD_INDEX}/${SHARD_COUNT}, workers=${WORKERS}, rubric=${RUBRIC}"
 python3 -u scripts/judge_relevance.py \
   --backend openai \
   --base-url http://127.0.0.1:8000/v1 \
@@ -145,6 +147,8 @@ python3 -u scripts/judge_relevance.py \
   --max-tokens "$MAX_TOKENS" \
   --temperature "$TEMPERATURE" \
   --timeout "$JUDGE_TIMEOUT" \
+  --rubric "$RUBRIC" \
+  ${RAW_OUTPUT:+--raw-output "$RAW_OUTPUT"} \
   ${THINKING_BUDGET:+--thinking-budget "$THINKING_BUDGET"} \
   "${RESUME_ARGS[@]}" \
   "${LIMIT_ARGS[@]}"

@@ -34,6 +34,8 @@ OUTPUT_PREFIX="${OUTPUT_PREFIX:-relevance_labels}"
 NODE_POOL="${NODE_POOL:-h100}"
 PYTHONUSERBASE_PATH="${PYTHONUSERBASE_PATH:-$REPO_DIR/python_user_judge}"
 HF_API_KEY_FILE_AT="${HF_API_KEY_FILE_AT:-/lightscratch/users/yiren/keys/hf_key.txt}"
+RUBRIC="${RUBRIC:-v1_boolean}"     # v1_boolean (legacy) or v2_graded (Phase 4)
+RAW_OUTPUT="${RAW_OUTPUT:-}"       # path for raw-response side file (v2 only); empty = <output>.raw.jsonl
 
 LOCAL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVER_ROOT="$SERVER:$SERVER_SCRATCH"
@@ -84,6 +86,8 @@ for shard in $(seq 0 $((SHARD_COUNT - 1))); do
     -e INPUT="$INPUT_PATH" \
     -e OUTPUT_DIR="$OUTPUT_DIR" \
     -e OUTPUT_PREFIX="$OUTPUT_PREFIX" \
+    -e RUBRIC="$RUBRIC" \
+    -e RAW_OUTPUT="$RAW_OUTPUT" \
     -e HF_HOME="$REPO_DIR/hf_cache" \
     -e PYTHONUSERBASE="${PYTHONUSERBASE_PATH}_shard${shard}" \
     -e RUNAI_HOME="$REPO_DIR/runai_home" \
