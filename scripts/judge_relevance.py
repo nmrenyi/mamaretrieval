@@ -759,13 +759,11 @@ def _call_openai(
     if rubric_name == "v1_boolean":
         # Strict schema enforcement (legacy behavior).
         payload["guided_json"] = spec["json_schema"]
-    else:
-        # v2_graded: drop guided_json so the model can think freely before
-        # emitting JSON. response_format=json_object loosely enforces "the
-        # output is a JSON object" without per-field schema constraints —
-        # enough to keep parsing robust while leaving room for the thinking
-        # trace to populate `reasoning_content`.
-        payload["response_format"] = {"type": "json_object"}
+    # v2_graded: no structured-output constraint of any kind. vLLM's
+    # `enable_in_reasoning=False` means BOTH guided_json AND
+    # response_format=json_object suppress the thinking trace. We rely on
+    # the prompt's "respond with valid JSON only" instruction + tolerant
+    # parsing for the output.
 
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -790,9 +788,16 @@ def _call_openai(
     # The reasoning parser may leak think tokens into content in two ways:
     #   (a) full block: <think>...</think>JSON  — strip the whole block
     #   (b) orphaned closing tag: </think>JSON  — strip just the closing tag
+    # In both cases, capture the thinking content to `thinking` if the
+    # reasoning_content field wasn't populated separately.
     if raw.startswith("<think>"):
         end = raw.find("</think>")
-        raw = raw[end + len("</think>"):].strip() if end != -1 else ""
+        if end != -1:
+            if not thinking:
+                thinking = raw[len("<think>"):end].strip()
+            raw = raw[end + len("</think>"):].strip()
+        else:
+            raw = ""
     elif raw.startswith("</think>"):
         raw = raw[len("</think>"):].strip()
 
@@ -810,8 +815,24 @@ def _call_openai(
             f"Empty content after thinking. reasoning_content[:3000]:\n{snippet}",
             "", 0,
         )
+
+    # Without schema enforcement, the model may emit free-text reasoning
+    # before/after the JSON object. Find the first `{`, parse one JSON
+    # object via raw_decode (tolerates trailing text), capture any
+    # pre-JSON text into `thinking` if not already populated.
+    json_start = raw.find("{")
+    if json_start == -1:
+        raise json.JSONDecodeError(
+            f"No JSON object found in content. raw_repr={repr(raw[:300])}",
+            raw, 0,
+        )
+    if json_start > 0:
+        leading = raw[:json_start].strip()
+        if leading and not thinking:
+            thinking = leading
+        raw = raw[json_start:]
     try:
-        parsed = json.loads(raw)
+        parsed, _consumed = json.JSONDecoder().raw_decode(raw)
     except json.JSONDecodeError as _je:
         raise json.JSONDecodeError(
             f"JSON parse failed. raw_repr={repr(raw[:300])}: {_je.msg}",
