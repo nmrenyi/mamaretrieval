@@ -21,7 +21,7 @@ The Phase 3 completeness audit asks: **on a 100-query subset, how much of the tr
 | 4 | Run the Phase 2b LLM judge (Qwen3.5-397B-A17B-FP8, same prompt and schema) on the 3,948 new pairs, on 2 sharded H100 jobs (32 workers each). | `data/audit/relevance_labels_audit.jsonl`, 3,939 records (9 dropped: missing-from-corpus or parse) |
 | 5 | Treat the audit-augmented label set (Phase 2b labels for these 100 queries ∪ audit labels) as the closest-to-ground-truth reference. Compute recall: (a) of Phase 2a's pool overall, (b) of each retriever's top-k. | `data/audit/results.md`, `data/audit/results.json` |
 
-Total audit-augmented labels for the 100 queries: **6,400 (q,c) pairs**.
+Total audit-augmented labels for the 100 queries: **6,479 (q,c) pairs** (Phase 2b 2,461 + Phase 3 audit 3,939 + Phase 4 Gecko-pool expansion 79).
 
 Code: `scripts/sample_audit_queries.py`, `scripts/{retrieve_bm25,retrieve_voyage,retrieve_lateon}_audit.py`, `scripts/build_audit_pool.py`, `scripts/build_judge_input_audit.py`, `scripts/{submit,run}_judge_relevance.sh`, `scripts/audit_metrics.py`.
 
@@ -90,6 +90,29 @@ Three things stand out:
 
 ---
 
+## Decomposition — depth vs breadth
+
+Variants A and B leave one question open: is the recall gap driven more by *retriever choice* (we should add retrievers) or *candidate depth* (we should go deeper into top-k)? Variant C in `results.md` decomposes this by sweeping retriever-subset × k.
+
+### Lenient (score ≥ 1) — union-pool recall
+
+| Retriever subset | Union@5 | Union@10 | Union@20 |
+|---|---:|---:|---:|
+| 3 retrievers (BM25+MedCPT+Octen, Phase 2a) | 0.290 | **0.485** | 0.765 |
+| 5 retrievers (add voyage + LateOn) | 0.428 | 0.676 | 0.995 |
+
+The original Phase 2a configuration sits at the **0.485** cell (3 retrievers, top-10). Two ways to move toward the 0.995 ceiling:
+
+- **Same 3 retrievers, deeper k**: 3-retriever@20 = 0.765 → +28 pp from depth alone
+- **Same depth, more retrievers**: 5-retriever@10 = 0.676 → +19 pp from breadth alone
+- **Both**: 5-retriever@20 = 0.995 → fully closes the gap
+
+**Depth gives a larger marginal lift than breadth on this 100-query sample.** The implication: increasing top-k from 10 → 20 on the existing 3 retrievers is a cheaper change than wiring in two new retrievers, and recovers more of the gap. Adding voyage on top is still worthwhile — it's the strongest single retriever — but the depth lever is the higher-leverage first move.
+
+(Strict numbers in `results.md` show the same pattern.)
+
+---
+
 ## Caveats on "completeness"
 
 The audit treats its label set as ground truth, but the label set is itself a pool — chunks no retriever ranked in their top-20 were never judged. Concretely:
@@ -126,11 +149,67 @@ Per discussion, the strict (score = 2) recall numbers are the most consequential
 
 ---
 
+## Phase 4 — Gecko deployment-quality measurement
+
+The Phase 3 audit benchmarked 5 retrievers (BM25, MedCPT, Octen, voyage-4-large, LateOn) — none of which is the retriever the production MAMAI app actually uses on-device. That retriever is **Gecko** (Google's 110M-param `Gecko_1024_quant.tflite`, 768-dim output, runs on-device via TFLite). Phase 4 asks: *how does the deployed retriever rank against the audit retrievers at the deployment depth (top-3)?*
+
+### Method
+
+| Step | What | Output |
+|---|---|---|
+| 1 | Embed the 100 audit queries with Gecko via Python (TFLite + sentencepiece, replicating `RagPipeline.kt`'s pipeline). | `data/audit/gecko_queries.npy` |
+| 2 | Cosine search against the v0.2.0 corpus embeddings (the same 63,650-chunk corpus the audit retrievers used; Gecko-embedded chunks loaded from `mamai-medical-guidelines` rag-bundle-v0.2.0/runtime/embeddings.sqlite). Top-20 per query. | `data/audit/gecko_top20.jsonl` |
+| 3 | Coverage check vs existing audit-augmented label set. Result: 73.7% of Gecko's top-3 chunks already had labels — below the 80% threshold that would have let us trust the metrics directly. | (gate decision) |
+| 4 | Pool-expansion: judge the 79 unlabeled (q,c) pairs from Gecko's top-3 with the **same Qwen3.5-397B model, prompt hash, and schema** as Phase 2b/3. Append to `relevance_labels_audit.jsonl` with `source: "gecko_pool_expansion"` provenance tag. | +79 records → 4,018 audit labels total |
+| 5 | Recompute coverage (now 100%) and Variant D metrics with all 6 retrievers including Gecko. | updated `data/audit/results.md` Variant D |
+
+Code: `scripts/retrieve_gecko_audit.py`, `scripts/build_judge_input_audit_gecko.py`, `scripts/gecko_coverage_audit.py`, `scripts/merge_gecko_labels.py`. Full plan: `notes/gecko_eval_runbook.md`.
+
+### Variant D — k=3 deployment metrics (lenient threshold, score ≥ 1)
+
+| Retriever | HR@3 | Precision@3 | MRR@3 | NDCG@3 (graded) |
+|---|---:|---:|---:|---:|
+| MedCPT | 0.810 | 0.453 | 0.643 | 0.350 |
+| BM25 | 0.870 | 0.563 | 0.773 | 0.483 |
+| **Gecko (deployed)** | **0.880** | **0.657** | **0.805** | **0.540** |
+| LateOn | 1.000 | 0.833 | 0.980 | 0.771 |
+| Octen | 1.000 | 0.880 | 0.990 | 0.806 |
+| **voyage-4-large** | **1.000** | **0.920** | **0.990** | **0.839** |
+
+Strict (score = 2) numbers preserve the same ordering — see `results.md` for the full table.
+
+### Headline
+
+**Gecko sits in the middle tier.** It clearly beats BM25 and MedCPT on every metric, and clearly loses to Octen, voyage, and LateOn by a meaningful margin (e.g. P@3 lenient: Gecko 0.66 vs voyage 0.92 — a ~30% absolute gap; NDCG@3: Gecko 0.54 vs voyage 0.84). HR@3 of 0.88 means Gecko surfaces at least one relevant chunk in the top-3 for 88 / 100 queries, but with weaker ranking quality than the top tier.
+
+### One concrete pooling-bias observation
+
+Two coverages from the gating step give a quantitative read on Gecko's "out-of-pool" behaviour:
+
+- Of Gecko's 300 top-3 chunks, only **18.7%** were also surfaced by any of the 5 audit retrievers — Gecko has a substantially different "opinion" than the benchmark retrievers (Phase 2b's broader judging pool covers another ~55%, leaving 26.3% novel).
+- When the 79 novel chunks were judged, **70% turned out to be score-0 (irrelevant), only 30% score ≥ 1**. The labeled-subset relevance rate (~78%) was inflated because that subset was, by construction, the chunks Gecko shared with stronger retrievers — the easy hits.
+
+This is the unbiased read on Gecko's pool divergence: real but mostly noise. Some unique-good signal exists (10 score-2 chunks others missed), but the bulk of the divergence is Gecko fishing in less-relevant water.
+
+### Deployment implication
+
+The deployed retrieval has a real quality ceiling — substantially below what an API retriever like voyage would deliver. The gap is the price of running on-device (110M-param Gecko vs server-side voyage-4-large). Three remediations to consider in priority order:
+
+| Option | Cost | Expected lift |
+|---|---|---|
+| **Hybrid retrieval** (Gecko + BM25 with reciprocal-rank fusion) | ~1 day; runs entirely on-device | partial — typically narrows the gap by 30–50% |
+| **On-device reranker** (small cross-encoder over Gecko's top-20) | ~1–2 weeks; ~50 MB additional model | larger; could close most of the gap if a competitive small reranker is available |
+| **Swap Gecko for a stronger on-device embedder** | months; depends on what fits the TFLite + ≤200 MB constraint | unknown; current Gecko is competitive among ~100M-param embedders |
+
+These are sketched here for completeness; deciding which to invest in is a separate workstream.
+
+---
+
 ## Provenance
 
-- Audit-augmented labels: 6,400 (q,c) pairs for 100 queries.
-- Judge model: `Qwen/Qwen3.5-397B-A17B-FP8` (identical to Phase 2b).
-- Prompt hash: `f36ff561215b3a6f` (identical to Phase 2b — verified via `llm_judge_prompt_hash` field).
-- Schema version: `v-f20c636b` (identical to Phase 2b).
+- Audit-augmented labels: **6,479 (q,c) pairs** for 100 queries (Phase 2b 2,461 + Phase 3 audit 3,939 + Phase 4 Gecko-pool expansion 79; Phase 2b and audit sets are disjoint by construction).
+- Judge model: `Qwen/Qwen3.5-397B-A17B-FP8` (identical across Phase 2b, Phase 3, Phase 4).
+- Prompt hash: `f36ff561215b3a6f` (identical across all phases — verified via `llm_judge_prompt_hash` field).
+- Schema version: `v-f20c636b` (identical across all phases).
 
 Generated by `scripts/audit_metrics.py`; raw per-query numbers in `data/audit/results.json`.
