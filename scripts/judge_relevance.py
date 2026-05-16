@@ -321,6 +321,16 @@ Chunk (WHO ANC 2016): "RECOMMENDATION A.2.1: Daily oral iron and folic acid \
 supplementation with 30 mg to 60 mg of elemental iron and 400 µg (0.4 mg) \
 folic acid is recommended for pregnant women to prevent maternal anaemia, \
 puerperal sepsis, low birth weight, and preterm birth."
+Example reasoning:
+D1: Iron and folic acid dosing in antenatal care — same topic, same context.
+D1 = true.
+D2: A formal recommendation with named indications (maternal anaemia,
+puerperal sepsis, LBW, preterm birth) — multiple clinical concepts in one
+paragraph. D2 = 2.
+D3: Specific dose ranges (30-60 mg elemental iron, 400 µg folic acid daily)
+with route (oral) — matches the "exact doses with route and frequency"
+anchor. D3 = 2.
+D4: The entire chunk is the recommendation statement. D4 = 2.
 Expected JSON:
 {"d1_topic": true, "d2_meaningful": 2, "d3_actionable": 2, "d4_density": 2}
 
@@ -334,6 +344,17 @@ Elevated Liver enzymes (indicating liver damage), and Low Platelet count. \
 Many hypotheses attempt to define the pathogenesis... Both HELLP and \
 preeclampsia occur during the later stages of pregnancy, and sometimes after \
 childbirth..."
+Example reasoning:
+D1: HELLP syndrome and severe preeclampsia — same topic. D1 = true.
+D2: Defines HELLP, breaks down the acronym with clinical meaning (RBC
+destruction, liver damage, platelet drop), and discusses timing and
+relationship to preeclampsia. Substantive clinical definitions. D2 = 2.
+D3: The chunk defines the syndrome but provides no diagnostic thresholds
+(e.g., AST > X, platelets < Y) and no management steps. Pure
+background/pathophysiology. D3 = 0.
+D4: The chunk is short and focused on HELLP. The pathogenesis text is
+adjacent context but the core (definition + acronym) directly addresses
+the query. D4 = 2.
 Expected JSON:
 {"d1_topic": true, "d2_meaningful": 2, "d3_actionable": 0, "d4_density": 2}
 
@@ -345,6 +366,16 @@ MANAGEMENT OF THE THIRD STAGE OF LABOUR | Sub-task: Ensure uterus well \
 contracted | Knowledge: Consistency of contracted uterus | Skill: Palpation \
 of uterus and massage to promote contraction | Attitudes: Accuracy, \
 Gentleness"
+Example reasoning:
+D1: Uterine tone in the third stage of labour — same topic, same timing.
+D1 = true.
+D2: Checklist row identifies the sub-task ("Ensure uterus well contracted"),
+the knowledge ("Consistency"), and the skill ("Palpation and massage"). Brief
+listing, no elaboration. D2 = 1.
+D3: Names actions (palpate, massage) but no procedural specifics — how to
+palpate, frequency, when soft vs firm, technique nuance. Partial guidance.
+D3 = 1.
+D4: The entire table row is on-topic for the query. D4 = 2.
 Expected JSON:
 {"d1_topic": true, "d2_meaningful": 1, "d3_actionable": 1, "d4_density": 2}
 
@@ -356,6 +387,12 @@ check blood pressure: The needle will begin to go back down. As the air leaks \
 out, you will start to hear the mother's pulse... Check the mother's blood \
 pressure at each visit. If her blood pressure is going up, ask her to come \
 back every week..."
+Example reasoning:
+D1: Query asks about postpartum monitoring; chunk is from "Chapter 8
+Prenatal checkups" and discusses BP "at each visit" and "come back every
+week" — antenatal context. Same parameter, different clinical timing.
+D1 = false.
+D2-D4: zeroed per the structural rule (D1 = false).
 Expected JSON:
 {"d1_topic": false, "d2_meaningful": 0, "d3_actionable": 0, "d4_density": 0}"""
 
