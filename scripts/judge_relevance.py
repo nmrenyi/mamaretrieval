@@ -629,9 +629,14 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--no-think",        action="store_true",
                    help="Disable model thinking (faster smoke tests).")
     p.add_argument("--thinking-budget", type=int, default=0,
-                   help="Cap thinking trace at N tokens (0 = unlimited). Use e.g. "
-                        "16384 to prevent the thinking trace from exhausting max_tokens "
-                        "and leaving no room for the JSON output.")
+                   help="SOFT cap on thinking trace (via Qwen3 chat_template_kwargs). "
+                        "Model is encouraged to wrap up at N tokens but may overshoot. "
+                        "0 = unlimited.")
+    p.add_argument("--thinking-token-budget", type=int, default=0,
+                   help="HARD cap on thinking trace (vLLM ThinkingTokenBudgetLogitsProcessor, "
+                        "PR #20859, available in vLLM 0.21.0+). Forcibly terminates the "
+                        "<think>...</think> block at N tokens via logits masking. "
+                        "0 = no hard cap. Recommended: set SOFT below HARD as belt-and-suspenders.")
     p.add_argument("--limit",      type=int, default=0,
                    help="Process at most N queries (0 = all). Default: %(default)s")
     p.add_argument("--shuffle",    action="store_true",
@@ -770,7 +775,8 @@ def _call_openai(
     max_tokens:  int,
     temperature: float,
     think:            bool,
-    thinking_budget:  int = 0,
+    thinking_budget:        int = 0,
+    thinking_token_budget:  int = 0,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Returns (result_record, raw_capture_or_None).
 
@@ -781,6 +787,7 @@ def _call_openai(
 
     chat_template_kwargs: dict[str, Any] = {"enable_thinking": think}
     if think and thinking_budget > 0:
+        # SOFT cap via Qwen3 chat template: model encouraged to wrap up.
         chat_template_kwargs["thinking_budget"] = thinking_budget
 
     payload: dict[str, Any] = {
@@ -797,6 +804,11 @@ def _call_openai(
     # set, runaway protection comes from there, not from max_tokens.
     if max_tokens > 0:
         payload["max_tokens"] = max_tokens
+    # HARD cap on thinking trace via vLLM ThinkingTokenBudgetLogitsProcessor.
+    # Forcibly closes <think>...</think> at N tokens; JSON output continues
+    # unaffected after the forced close.
+    if thinking_token_budget > 0:
+        payload["thinking_token_budget"] = thinking_token_budget
     if rubric_name == "v1_boolean":
         # Strict schema enforcement (legacy behavior).
         payload["guided_json"] = spec["json_schema"]
@@ -1041,7 +1053,8 @@ def _process_one(
     max_tokens:  int,
     temperature: float,
     think:            bool,
-    thinking_budget:  int = 0,
+    thinking_budget:        int = 0,
+    thinking_token_budget:  int = 0,
     retries:          int = 2,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Judge one pair, retrying transient errors up to `retries` times.
@@ -1056,7 +1069,7 @@ def _process_one(
                 return _call_openai(
                     query_id, query_text, chunk_id, chunk, rubric_name,
                     model, base_url, api_key, timeout, max_tokens, temperature, think,
-                    thinking_budget,
+                    thinking_budget, thinking_token_budget,
                 )
             return _call_ollama(
                 query_id, query_text, chunk_id, chunk, rubric_name,
@@ -1280,7 +1293,7 @@ def main() -> int:
                     args.backend, model,
                     args.ollama_url, args.base_url, args.api_key,
                     args.timeout, args.max_tokens, args.temperature,
-                    not args.no_think, args.thinking_budget,
+                    not args.no_think, args.thinking_budget, args.thinking_token_budget,
                 ): (qid, cid)
                 for qid, qtext, cid in todo
             }

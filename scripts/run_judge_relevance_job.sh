@@ -24,10 +24,13 @@ WORKERS="${WORKERS:-8}"
 MAX_TOKENS="${MAX_TOKENS:-0}"        # 0 = omit; vLLM defaults to (max_model_len - input)
 TEMPERATURE="${TEMPERATURE:-0.0}"
 JUDGE_TIMEOUT="${JUDGE_TIMEOUT:-1800}"
-# Soft cap on the Qwen3 thinking trace (chat_template_kwargs.thinking_budget).
-# 25k tokens = ~90% of the output budget after the v2.1 prompt + typical chunk,
-# leaving ~10% headroom for JSON output and safety.
-THINKING_BUDGET="${THINKING_BUDGET:-25000}"
+# SOFT cap on the Qwen3 thinking trace (chat_template_kwargs.thinking_budget).
+# Model is encouraged to wrap up at this token count but may overshoot.
+THINKING_BUDGET="${THINKING_BUDGET:-10000}"
+# HARD cap on the thinking trace (vLLM ThinkingTokenBudgetLogitsProcessor).
+# Logits-level enforcement: forces </think> at this token count. JSON output
+# continues unaffected after the forced close. Set above SOFT as a safety net.
+THINKING_TOKEN_BUDGET="${THINKING_TOKEN_BUDGET:-25000}"
 LIMIT="${LIMIT:-0}"
 RUBRIC="${RUBRIC:-v1_boolean}"   # v1_boolean (legacy) or v2_graded (Phase 4)
 RAW_OUTPUT="${RAW_OUTPUT:-}"     # path for raw-response side file (v2 only); empty = auto
@@ -153,6 +156,7 @@ python3 -u scripts/judge_relevance.py \
   --rubric "$RUBRIC" \
   ${RAW_OUTPUT:+--raw-output "$RAW_OUTPUT"} \
   ${THINKING_BUDGET:+--thinking-budget "$THINKING_BUDGET"} \
+  ${THINKING_TOKEN_BUDGET:+--thinking-token-budget "$THINKING_TOKEN_BUDGET"} \
   "${RESUME_ARGS[@]}" \
   "${LIMIT_ARGS[@]}"
 
