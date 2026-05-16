@@ -41,6 +41,7 @@ PER_RETRIEVER_INPUTS = {
     "octen":  "data/audit/octen_top20.jsonl",
     "voyage": "data/audit/voyage_top20.jsonl",
     "lateon": "data/audit/lateon_top20.jsonl",
+    "gecko":  "data/audit/gecko_top20.jsonl",
 }
 
 
@@ -191,6 +192,72 @@ def main() -> int:
                 )
         variant_c[label] = rows
 
+    # ──────── Variant D: k=3 deployment metrics (HR, Precision, MRR, NDCG) ────────
+    # Precision-style + ranking metrics at the deployment depth (top-3).
+    # Uses graded relevance scores (0/1/2) for NDCG; lenient (>=1) and strict
+    # (==2) thresholds for HR / Precision / MRR.
+    import math
+
+    def gain(score: int) -> float:
+        # Standard graded-relevance gain: 2^score - 1
+        return (2 ** score) - 1 if score > 0 else 0.0
+
+    def dcg(scores: list[int]) -> float:
+        return sum(gain(s) / math.log2(i + 2) for i, s in enumerate(scores))
+
+    def ndcg_at_k(qid: str, ranked_chunks: list[str], k: int) -> float | None:
+        """Graded NDCG@k against the augmented label set; None if no relevant."""
+        top_scores = [augmented.get((qid, cid), 0) for cid in ranked_chunks[:k]]
+        # Ideal: top-k scores from the FULL relevant set for this query
+        all_scores = [s for (q, _), s in augmented.items() if q == qid and s > 0]
+        if not all_scores:
+            return None
+        ideal_top_k = sorted(all_scores, reverse=True)[:k]
+        idcg = dcg(ideal_top_k)
+        if idcg == 0:
+            return None
+        return dcg(top_scores) / idcg
+
+    def compute_k3_deployment_metrics(
+        ranks: dict[str, list[str]], qid_relevant: dict[str, set[str]], k: int = 3
+    ) -> dict[str, dict | None]:
+        """Return {HR@k, Precision@k, MRR@k} for one threshold's relevant set."""
+        hr_list, prec_list, mrr_list = [], [], []
+        for qid in audit_qids:
+            rel = qid_relevant.get(qid, set())
+            if not rel:
+                continue
+            top_k = ranks.get(qid, [])[:k]
+            hits = [1 if c in rel else 0 for c in top_k]
+            hr_list.append(1.0 if sum(hits) > 0 else 0.0)
+            prec_list.append(sum(hits) / k)
+            first_hit = next((i + 1 for i, h in enumerate(hits) if h == 1), None)
+            mrr_list.append(1.0 / first_hit if first_hit else 0.0)
+        return {
+            f"HR@{k}": stats(hr_list),
+            f"Precision@{k}": stats(prec_list),
+            f"MRR@{k}": stats(mrr_list),
+        }
+
+    def compute_ndcg_at_k(ranks: dict[str, list[str]], k: int = 3) -> dict | None:
+        ndcgs: list[float] = []
+        for qid in audit_qids:
+            v = ndcg_at_k(qid, ranks.get(qid, []), k)
+            if v is not None:
+                ndcgs.append(v)
+        return stats(ndcgs)
+
+    variant_d: dict[str, dict] = {}
+    for retriever, ranks in per_retriever_ranks.items():
+        ret_results: dict = {}
+        for thresh_label, qid_rel in [
+            ("lenient_score>=1", qid_relevant_lenient),
+            ("strict_score==2", qid_relevant_strict),
+        ]:
+            ret_results[thresh_label] = compute_k3_deployment_metrics(ranks, qid_rel, k=3)
+        ret_results["NDCG@3_graded"] = compute_ndcg_at_k(ranks, k=3)
+        variant_d[retriever] = ret_results
+
     # ──────── Raw JSON ────────
     raw = {
         "audit_queries": len(audit_qids),
@@ -221,6 +288,7 @@ def main() -> int:
         "variant_a_benchmark_pool": variant_a,
         "variant_b_per_retriever":  variant_b,
         "variant_c_union_pool_by_subset_and_k": variant_c,
+        "variant_d_k3_deployment_metrics": variant_d,
     }
     Path(args.raw).write_text(json.dumps(raw, indent=2))
     print(f"Raw results -> {args.raw}", flush=True)
@@ -309,6 +377,31 @@ def main() -> int:
             for k in args.cutoffs:
                 row.append(fmt(variant_c[subset_label].get(f"{thresh_label}@{k}")))
             md.append("| " + " | ".join(row) + " |")
+        md.append("")
+    md.append("---")
+    md.append("")
+    md.append("## Variant D — k=3 deployment metrics (precision + ranking)")
+    md.append("")
+    md.append(
+        "Precision-style and ranking metrics at the deployment depth (top-3). "
+        "Includes **`gecko`** (the on-device deployed retriever, v0.2.0 corpus). "
+        "Coverage gap closed via the Gecko pool-expansion judge run "
+        "(see `notes/gecko_eval_runbook.md`). NDCG@3 uses graded relevance "
+        "(scores 0/1/2 directly); HR / Precision / MRR are at two thresholds."
+    )
+    md.append("")
+    for thresh_label in ["lenient_score>=1", "strict_score==2"]:
+        md.append(f"### Threshold: `{thresh_label}`")
+        md.append("")
+        md.append("| Retriever | HR@3 | Precision@3 | MRR@3 | NDCG@3 (graded) |")
+        md.append("|---|---:|---:|---:|---:|")
+        for retriever in PER_RETRIEVER_INPUTS:
+            d = variant_d[retriever][thresh_label]
+            ndcg = variant_d[retriever]["NDCG@3_graded"]
+            md.append(
+                f"| {retriever} | {fmt(d['HR@3'])} | {fmt(d['Precision@3'])} | "
+                f"{fmt(d['MRR@3'])} | {fmt(ndcg)} |"
+            )
         md.append("")
     md.append("---")
     md.append("")
