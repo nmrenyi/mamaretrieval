@@ -783,7 +783,10 @@ def _call_openai(
 
     msg    = response["choices"][0]["message"]
     raw    = (msg.get("content") or "").strip()
-    thinking = (msg.get("reasoning_content") or "")
+    # vLLM 0.9+ exposes the reasoning trace as `message.reasoning`. Older
+    # versions used `reasoning_content`. Read both so the parser works on
+    # any vLLM version.
+    thinking = (msg.get("reasoning") or msg.get("reasoning_content") or "")
 
     # The reasoning parser may leak think tokens into content in two ways:
     #   (a) full block: <think>...</think>JSON  — strip the whole block
