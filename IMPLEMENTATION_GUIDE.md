@@ -4,6 +4,53 @@
 
 ---
 
+## 0. Methodology update (2026-05-16)
+
+This guide originally framed mamaretrieval as a **static labeled benchmark**:
+build `queries.jsonl` + `relevance_labels.jsonl` once via Phases 1-3, then
+evaluate any future retriever cheaply by intersecting its top-K with the
+stored `relevant_chunk_ids`. We've shifted approach.
+
+**New framing: per-retriever evaluation.** For each retriever under
+evaluation, judge what *that retriever* actually returns at top-3 (or
+top-15) using a fine-grained 0-5 rubric. Compute precision-focused metrics
+(HR@3, Precision@3, MRR@3, NDCG@3 graded) directly. See Phase 4 in §8 below.
+
+**Why the shift**:
+- At deployment depth k=3, **precision is the question, not recall** —
+  building a complete `relevant_chunk_ids` set per query (the labels'
+  design purpose) only matters if recall metrics are load-bearing
+- Each retriever has its own out-of-pool chunks the pre-built labels don't
+  cover. Phase 4 Gecko measurement showed 26% of its top-3 picks were
+  unlabeled, requiring per-retriever pool expansion anyway
+
+**What stays from Phases 1-3** (still load-bearing, executed, preserved):
+- §6, §7, §8 Phase 1a/1b/1c — corpus parsing, chunk sampling, LLM filter,
+  query assembly. The 3,185-query `data/queries.jsonl` is unchanged
+- `data/relevance_labels.jsonl` (78,571 Phase 2b labels) preserved as a
+  **warm-start cache** — when a retriever surfaces a chunk Phase 2b already
+  judged, look up the label instead of re-judging
+- `data/audit/relevance_labels_audit.jsonl` (3,939 Phase 3 + 79 Phase 4
+  labels) preserved; same warm-start function
+- §6 sampling strategy, §7 corpus format, §5 schemas — all still apply
+
+**What is superseded**:
+- §8 Phase 2a (`pool_candidates.py`) — pool-based candidate generation no
+  longer drives judging; retrievers are run directly per-evaluation
+- §8 Phase 2b at pool scale — the script is reused at per-retriever scale
+- §8 Phase 3 (`audit.py`) — became the *precedent* for Phase 4 and is no
+  longer the primary completeness mechanism
+- §9 Release packaging — replaced by per-retriever results bundles
+
+**See IMPLEMENTATION_PLAN.md "Stage 9: Per-retriever evaluation" for the
+matching shift on the planning side.**
+
+The pre-shift sections below (§1-§11) are preserved as historical context
+and remain accurate for the parts that executed. A new Phase 4 subsection
+is added in §8 describing the new methodology.
+
+---
+
 ## 1. Project context
 
 **MAMAI** is a Gemma 4 E4B + RAG medical-advice chatbot deployed for nurses and midwives in Zanzibar, covering OBGYN, neonatal/infant care, and reproductive health. The RAG corpus is a collection of chunked clinical guidelines (WHO, Tanzania MOH, Zanzibar MOH, and supplementary midwifery references).
@@ -595,7 +642,7 @@ Research basis:
 
 ### Phase 3 — `scripts/audit.py`
 
-**Purpose:** Build a 30-query gold-standard subset with exhaustive labels. Compare against pipeline labels to validate label quality. Report the gap as the error bar on all retrieval scores.
+> **Status:** executed at 100 queries × 5 retrievers (not the original 30 queries × 6 retrievers), produced `AUDIT_REPORT.md` and `data/audit/results.md` Variants A/B/C. **Superseded by Phase 4** as the primary evaluation mechanism — but its outputs (audit labels, the Variant A/B/C recall numbers, the 100-query stratified sample) are still load-bearing for the historical recall narrative.
 
 **Input:** `data/queries.jsonl`, `data/relevance_labels.jsonl`, corpus chunks, `config.yaml`
 
@@ -636,7 +683,102 @@ Verdict: [fit for purpose / expand pool]
 
 ---
 
+### Phase 4 — Per-retriever evaluation (new methodology, replaces Phase 2a + 2b + 3 as primary path)
+
+**Purpose:** For each retriever under evaluation, judge what *that retriever*
+actually returns at top-3 (or top-15) with a fine-grained 0-5 rubric. Compute
+deployment-precision metrics (HR@3, P@3, MRR@3, NDCG@3 graded) directly.
+Avoids pooling bias and avoids investing in a static labeled benchmark we
+don't actually need at k=3.
+
+**Pipeline:**
+
+```
+queries.jsonl (3,185)  ──▶  retriever-N top-K  ──▶  candidates input
+                                                       (dedup vs warm-start
+                                                        Phase 2b + 3 labels)
+                                                              │
+                                                              ▼
+                                                       cluster judge job
+                                                       (fine-grained 0-5 rubric)
+                                                              │
+                                                              ▼
+                                                       per-retriever labels
+                                                              │
+                                                              ▼
+                                                       Variant D metrics
+                                                       (audit_metrics.py)
+```
+
+**Script set (Phase 4-flavour, partly already implemented for Gecko at 100-query
+scale):**
+
+| Script | Purpose | Status |
+|---|---|---|
+| `scripts/retrieve_<retriever>_audit.py` | Run retriever on the 3,185 queries, write `data/per_retriever/<retriever>_top<k>.jsonl` (schema: `{query_id, model, top_k, results: [{chunk_id, rank, score}]}`) | implemented for bm25 / voyage / lateon / gecko at 100-query scale; need to generalise to 3,185 queries |
+| `scripts/build_judge_input_audit_<retriever>.py` | Produce candidates JSONL of (q,c) pairs in the retriever's top-K that are NOT in the warm-start cache (Phase 2b ∪ Phase 3 audit ∪ prior Phase 4 runs) | implemented for gecko; pattern is generic |
+| `scripts/submit_judge_relevance.sh` (+ `run_*`) | Submit cluster judge job with new schema_version + prompt_hash for the 0-5 rubric | existing script; passes through via env overrides |
+| `scripts/merge_*_labels.py` | Merge judge output into a per-retriever label store; tag `source: "phase4_<retriever>"` for provenance | gecko version exists; pattern is generic |
+| `scripts/audit_metrics.py` Variant D | Produce HR@3 / P@3 / MRR@3 / NDCG@3-graded per retriever, with bootstrap 95% CIs | Variant D already implemented at 100-query scale; needs CIs and full-3,185-query mode |
+
+**Rubric (0-5 graded, replaces D1×(D2+D3) ∈ {0,1,2}):**
+
+- 5 — directly and fully answers the query (specific dose / protocol for the
+  exact scenario asked)
+- 4 — mostly answers; minor scope gap (e.g. dose for a related scenario)
+- 3 — partially answers; useful but incomplete
+- 2 — tangentially relevant; mentions the topic without useful detail
+- 1 — barely related; touches an adjacent topic
+- 0 — irrelevant
+
+Includes 5 worked examples anchoring the scale (especially the 2/3 and 3/4
+boundaries). New `llm_judge_prompt_hash` and `llm_judge_schema_version`
+register the rubric change.
+
+**Warm-start cache.** Old Phase 2b/3 labels (3-level rubric) and new
+Phase 4 labels (0-5 rubric) are not score-compatible. The warm-start cache
+applies only when the same retriever is re-evaluated under the same rubric.
+First Phase 4 run on a retriever incurs the full judging cost; subsequent
+runs (e.g. after a corpus version bump) only judge the diff.
+
+**Cost estimate (full scale):**
+3,185 q × 6 retrievers × top-3 ≈ 57,330 raw pairs; ~50% dedup across
+retrievers leaves ~28,000 fresh judgments; ~1-2 hours of cluster judging
+on Qwen3.5-397B-A17B-FP8 with TP=8.
+
+**Validation (replaces deferred Stage 6 "85% agreement" calibration):**
+
+- Manual review of 50 random fine-grained calls (5 per grade × 10 grades)
+- Bootstrap 95% CIs on Variant D numbers (sample of 3,185 queries gives
+  tight intervals, unlike the 100-query subset)
+
+**Outputs:**
+
+- `data/per_retriever/<retriever>_top<k>.jsonl` — per-retriever rankings
+- `data/per_retriever_labels/<retriever>_<schema>.jsonl` — per-retriever judge labels
+- `data/per_retriever/results.md` — Variant D table with all evaluated retrievers + CIs
+
+---
+
 ## 9. Release packaging
+
+> **Status (2026-05-16):** the static `relevance_labels.jsonl` release artifact
+> is **no longer the primary deliverable** under the Phase 4 per-retriever
+> methodology — see §0 and Phase 4 in §8. Static labels are preserved as a
+> warm-start cache only. The release format below was the original Stage 8
+> plan and is kept here for historical reference.
+
+**New release format (per Phase 4):** `releases/mamaretrieval-vN/`:
+
+- `queries.jsonl` (unchanged from Phase 1c)
+- `per_retriever/<retriever>_top<k>.jsonl` (one per evaluated retriever)
+- `per_retriever_labels/<retriever>_<schema>.jsonl` (judge labels for that
+  retriever under the current rubric)
+- `results.md` snapshot (Variant D table with CIs)
+- `manifest.json` recording: bundle/corpus version, judge model + prompt hash
+  + schema version, list of evaluated retrievers, date
+
+**Original (superseded) Stage 8 release:**
 
 Once all phases are complete and the audit passes:
 
@@ -646,7 +788,7 @@ Once all phases are complete and the audit passes:
 4. Write `releases/mamaretrieval-v1/manifest.json` with:
    - `version`, `corpus_version` (read from mamai-medical-guidelines manifest at `releases/rag-bundle-v0.2.0/manifest.json`), `date`, `query_count`, `label_count`, `sources_sampled`, `notes`.
 
-The `releases/mamaretrieval-v1/` directory is the artifact consumed by the evaluation pipeline.
+The `releases/mamaretrieval-v1/` directory was originally intended as the artifact consumed by the evaluation pipeline.
 
 ---
 
@@ -666,6 +808,8 @@ The `releases/mamaretrieval-v1/` directory is the artifact consumed by the evalu
 
 ## 11. Running order
 
+### Original sequence (Phases 1-3, executed)
+
 ```bash
 python scripts/sample_chunks.py      # → data/sampled_chunks.jsonl
 python scripts/llm_filter_chunks.py  # → data/llm_filtered_chunks.jsonl
@@ -677,3 +821,43 @@ python scripts/audit.py              # → data/audit/  (requires manual review 
 
 Estimated total cost: ~$30–60 in OpenAI API calls.
 Estimated wall time: 2–4 hours (dominated by Phase 2a FAISS indexing and Phase 2b API calls).
+
+### Phase 4 sequence (new methodology, per-retriever)
+
+Phase 1 outputs (`data/queries.jsonl`, the 3,185 queries) and Phase 2b labels
+(`data/relevance_labels.jsonl`, warm-start cache) remain inputs. For each
+retriever:
+
+```bash
+# 1. Run the retriever on the full 3,185-query set, top-K (default 3)
+python scripts/retrieve_<retriever>_audit.py \
+    --queries data/queries.jsonl \
+    --top-k 3 \
+    --output data/per_retriever/<retriever>_top3.jsonl
+
+# 2. Build candidates input — only (q,c) pairs not already in the warm-start cache
+python scripts/build_judge_input_audit_<retriever>.py \
+    --retriever-top3 data/per_retriever/<retriever>_top3.jsonl \
+    --output data/per_retriever/candidates_<retriever>.jsonl
+
+# 3. Submit cluster judge with the new 0-5 rubric (new prompt_hash + schema_version)
+JOB_PREFIX=mamaretrieval-judge-phase4-<retriever> \
+INPUT_PATH=data/per_retriever/candidates_<retriever>.jsonl \
+OUTPUT_DIR=data/per_retriever_labels \
+OUTPUT_PREFIX=<retriever>_<schema> \
+SHARD_COUNT=1 \
+bash scripts/submit_judge_relevance.sh
+
+# 4. Sync results back, merge into per-retriever label store
+rsync -av light:.../per_retriever_labels/<retriever>_<schema>_shard0.jsonl data/per_retriever_labels/
+python scripts/merge_phase4_labels.py --retriever <retriever>
+
+# 5. After all retrievers processed, regenerate Variant D
+python scripts/audit_metrics.py --mode phase4 \
+    --queries data/queries.jsonl \
+    --output data/per_retriever/results.md
+```
+
+Estimated cost per retriever: 0 (cluster) — vLLM startup ~10 min dominates.
+Estimated wall time per retriever: ~30-60 min cluster (highly variable due to
+preemption / queue). All 6 retrievers, parallelisable: ~2-4 hours wall time.
