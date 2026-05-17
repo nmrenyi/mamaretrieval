@@ -2,17 +2,21 @@
 """Variant D over v2 graded labels — top-k deployment metrics per retriever.
 
 Reads the v2 pilot labels (score = d1 × (d2 + d3 + d4), range 0–6) and the six
-top-20 retriever files; computes HR@k, Precision@k, MRR@k, and graded NDCG@k
-per retriever at a lenient (T≥3) and a strict (T≥5) threshold.
+top-20 retriever files; computes Hit-Rate and Precision per retriever in two
+flavors:
 
-NDCG uses graded scores (0–6) directly via gain = 2^score − 1. The "ideal" top-k
-for NDCG is computed from the judged pool only (the union of retrievers' top-k
-that was labeled), so it reflects the best ranking achievable given what we
-chose to judge — same convention as audit_metrics.py.
+  Binary  — at a lenient (T≥3) and a strict (T≥5) threshold on the score.
+  Weighted — each chunk contributes score/6 ∈ [0, 1]; no threshold.
+
+For RAG at k=3 with a long-context LLM consuming all three chunks (no position
+bias), HR ("is the information present in the bundle?") and Precision ("how
+much of the bundle is useful vs noise?") are the operationally meaningful
+metrics. MRR and NDCG add no information beyond these in that setting and are
+omitted from this report.
 
 Inputs:
   --labels    data/audit/v2_pilot_h100_shard0.jsonl  (v2 graded judgments)
-  per-retriever top-20 files (hardcoded paths per PER_RETRIEVER_INPUTS)
+  per-retriever top-20 files (hardcoded in PER_RETRIEVER_INPUTS)
 
 Outputs:
   --report    data/audit/results_v2.md
@@ -22,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -58,14 +61,6 @@ def score_v2(rec: dict) -> int:
          + (rec.get("d4_density", 0) or 0)
 
 
-def gain(s: int) -> float:
-    return (2 ** s) - 1 if s > 0 else 0.0
-
-
-def dcg(scores: list[int]) -> float:
-    return sum(gain(s) / math.log2(i + 2) for i, s in enumerate(scores))
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--labels", default="data/audit/v2_pilot_h100_shard0.jsonl")
@@ -97,17 +92,16 @@ def main() -> int:
     print(f"v2 labels: {len(score)} pairs across {len(qids)} queries "
           f"(skipped {skipped} non-v2 / errored)", flush=True)
 
-    # Per-qid relevant sets at the two thresholds + score lists for NDCG ideal
+    # Per-qid relevant sets at the two thresholds
     rel_lenient: dict[str, set[str]] = defaultdict(set)
     rel_strict: dict[str, set[str]] = defaultdict(set)
-    qid_scores: dict[str, list[int]] = defaultdict(list)
+    qid_has_any_judged: set[str] = set()
     for (q, c), s in score.items():
         if s >= args.lenient:
             rel_lenient[q].add(c)
         if s >= args.strict:
             rel_strict[q].add(c)
-        if s > 0:
-            qid_scores[q].append(s)
+        qid_has_any_judged.add(q)
 
     # Load per-retriever rankings
     ranks: dict[str, dict[str, list[str]]] = {}
@@ -118,73 +112,53 @@ def main() -> int:
             m[rec["query_id"]] = [r["chunk_id"] for r in rec["results"]]
         ranks[retriever] = m
 
-    def metrics_for(retriever: str, rel_map: dict[str, set[str]]) -> dict:
+    def binary_metrics(retriever: str, rel_map: dict[str, set[str]]) -> dict:
         k = args.k
-        hr, prec, mrr = [], [], []
+        hr, prec = [], []
         for q in qids:
             rel = rel_map.get(q, set())
             if not rel:
                 continue
             top = ranks[retriever].get(q, [])[:k]
-            hits = [1 if c in rel else 0 for c in top]
-            hr.append(1.0 if sum(hits) > 0 else 0.0)
-            prec.append(sum(hits) / k)
-            first = next((i + 1 for i, h in enumerate(hits) if h == 1), None)
-            mrr.append(1.0 / first if first else 0.0)
-        return {
-            f"HR@{k}": stats(hr),
-            f"P@{k}": stats(prec),
-            f"MRR@{k}": stats(mrr),
-        }
+            hits = sum(1 for c in top if c in rel)
+            hr.append(1.0 if hits > 0 else 0.0)
+            prec.append(hits / k)
+        return {f"HR@{k}": stats(hr), f"P@{k}": stats(prec)}
 
-    def weighted_metrics(retriever: str) -> dict:
-        """Threshold-free weighted variants — each chunk contributes score/6."""
+    def weighted_metrics(retriever: str, threshold: int,
+                         rel_map: dict[str, set[str]]) -> dict:
+        """Weighted: chunks at score >= threshold contribute score/6; else 0.
+
+        Restricted to queries with at least one chunk meeting the threshold
+        (matches the denominator convention of the binary version).
+        """
         k = args.k
-        whr, wprec, wmrr = [], [], []
-        rank_weights = [1.0 / (i + 1) for i in range(k)]  # 1/1, 1/2, 1/3, ...
-        rank_sum = sum(rank_weights)
+        whr, wprec = [], []
         for q in qids:
-            # Use any query that has at least one judged chunk in the pool
-            if not qid_scores.get(q):
+            if not rel_map.get(q):
                 continue
             top = ranks[retriever].get(q, [])[:k]
-            top_scores = [score.get((q, c), 0) / 6.0 for c in top]
-            # Pad with 0 if retriever returned fewer than k
+            top_scores = []
+            for c in top:
+                s = score.get((q, c), 0)
+                top_scores.append(s / 6.0 if s >= threshold else 0.0)
             while len(top_scores) < k:
                 top_scores.append(0.0)
             whr.append(max(top_scores))
             wprec.append(sum(top_scores) / k)
-            wmrr.append(
-                sum(s * w for s, w in zip(top_scores, rank_weights)) / rank_sum
-            )
-        return {
-            f"wHR@{k}": stats(whr),
-            f"wP@{k}": stats(wprec),
-            f"wMRR@{k}": stats(wmrr),
-        }
+        return {f"wHR@{k}": stats(whr), f"wP@{k}": stats(wprec)}
 
-    def ndcg_for(retriever: str) -> dict | None:
-        k = args.k
-        out = []
-        for q in qids:
-            ideal = sorted(qid_scores.get(q, []), reverse=True)[:k]
-            if not ideal:
-                continue
-            idcg = dcg(ideal)
-            if idcg == 0:
-                continue
-            top = ranks[retriever].get(q, [])[:k]
-            top_scores = [score.get((q, c), 0) for c in top]
-            out.append(dcg(top_scores) / idcg)
-        return stats(out)
-
-    variant_d: dict[str, dict] = {}
+    per_retriever: dict[str, dict] = {}
     for retriever in PER_RETRIEVER_INPUTS:
-        variant_d[retriever] = {
-            f"lenient_score>={args.lenient}": metrics_for(retriever, rel_lenient),
-            f"strict_score>={args.strict}": metrics_for(retriever, rel_strict),
-            "weighted_by_score_over_6": weighted_metrics(retriever),
-            f"NDCG@{args.k}_graded": ndcg_for(retriever),
+        per_retriever[retriever] = {
+            f"binary_lenient(>={args.lenient})":
+                binary_metrics(retriever, rel_lenient),
+            f"binary_strict(>={args.strict})":
+                binary_metrics(retriever, rel_strict),
+            f"weighted_lenient(>={args.lenient})":
+                weighted_metrics(retriever, args.lenient, rel_lenient),
+            f"weighted_strict(>={args.strict})":
+                weighted_metrics(retriever, args.strict, rel_strict),
         }
 
     score_dist = {s: sum(1 for v in score.values() if v == s) for s in range(7)}
@@ -202,7 +176,7 @@ def main() -> int:
             f"lenient(>={args.lenient})": n_with_lenient_rel,
             f"strict(>={args.strict})": n_with_strict_rel,
         },
-        "variant_d_per_retriever": variant_d,
+        "per_retriever": per_retriever,
     }
     Path(args.raw).write_text(json.dumps(raw, indent=2))
     print(f"Raw    -> {args.raw}", flush=True)
@@ -212,7 +186,7 @@ def main() -> int:
         return f"{v['mean']:.3f}" if v else "n/a"
 
     md = [
-        "# v2 graded — Variant D (top-k deployment metrics)",
+        "# v2 graded — Variant D (HR / Precision at k=3)",
         "",
         f"> Auto-generated by `scripts/audit_metrics_v2.py` from `{args.labels}`. "
         "Re-run the script to regenerate; do not hand-edit.",
@@ -224,6 +198,11 @@ def main() -> int:
         f"- Strict threshold:  **score ≥ {args.strict}** "
         f"({n_with_strict_rel} queries have ≥1 relevant chunk)",
         f"- Cutoff: k = **{args.k}**",
+        "",
+        "For RAG at k=3 with a long-context LLM (no position bias), only HR "
+        "(\"is the info in the bundle?\") and Precision (\"how much of the bundle "
+        "is useful?\") are operationally meaningful. MRR / NDCG would matter if "
+        "position within top-k drove downstream behavior; here it doesn't.",
         "",
         "## Pilot score distribution",
         "",
@@ -242,73 +221,62 @@ def main() -> int:
     md.append("")
     md.append("---")
     md.append("")
-    for thresh_label in [
-        f"lenient_score>={args.lenient}",
-        f"strict_score>={args.strict}",
-    ]:
-        md.append(f"## Threshold: `{thresh_label}`")
+
+    md.append("## Definitions (k=3)")
+    md.append("")
+    md.append(
+        "**Binary HR / P** — chunk is \"relevant\" if its score is ≥ threshold; "
+        "0 otherwise. "
+        "HR = 1 if any chunk in top-k is relevant, else 0. "
+        "P = (count of relevant in top-k) / k."
+    )
+    md.append("")
+    md.append(
+        "**Weighted HR / P** — chunks at score ≥ threshold contribute score/6 "
+        "(in [0.5, 1.0]); chunks below contribute 0. "
+        "wHR = max contribution over top-k (best chunk seen). "
+        "wP = mean contribution over top-k (average chunk quality)."
+    )
+    md.append("")
+    md.append(
+        "All four variants share the same denominator: only queries with at "
+        "least one chunk meeting the threshold count toward the mean."
+    )
+    md.append("")
+    md.append("---")
+    md.append("")
+
+    # Four tables, one per (binary/weighted) × (lenient/strict) combo
+    table_specs = [
+        (f"binary_lenient(>={args.lenient})",
+         f"Binary, lenient (score ≥ {args.lenient})",
+         f"HR@{args.k}", f"P@{args.k}"),
+        (f"binary_strict(>={args.strict})",
+         f"Binary, strict (score ≥ {args.strict})",
+         f"HR@{args.k}", f"P@{args.k}"),
+        (f"weighted_lenient(>={args.lenient})",
+         f"Weighted, lenient (score ≥ {args.lenient}, others → 0)",
+         f"wHR@{args.k}", f"wP@{args.k}"),
+        (f"weighted_strict(>={args.strict})",
+         f"Weighted, strict (score ≥ {args.strict}, others → 0)",
+         f"wHR@{args.k}", f"wP@{args.k}"),
+    ]
+    for key, title, hr_col, p_col in table_specs:
+        md.append(f"## {title}")
         md.append("")
-        md.append(
-            f"| Retriever | HR@{args.k} | P@{args.k} | MRR@{args.k} | "
-            f"NDCG@{args.k} (graded) | n queries |"
-        )
-        md.append("|---|---:|---:|---:|---:|---:|")
+        md.append(f"| Retriever | {hr_col} | {p_col} | n queries |")
+        md.append("|---|---:|---:|---:|")
         for retriever in PER_RETRIEVER_INPUTS:
-            d = variant_d[retriever][thresh_label]
-            ndcg = variant_d[retriever][f"NDCG@{args.k}_graded"]
-            n_used = d[f"HR@{args.k}"]["n_queries_used"] if d[f"HR@{args.k}"] else 0
+            d = per_retriever[retriever][key]
+            n_used = d[hr_col]["n_queries_used"] if d[hr_col] else 0
             md.append(
-                f"| {retriever} | {fmt(d[f'HR@{args.k}'])} | "
-                f"{fmt(d[f'P@{args.k}'])} | {fmt(d[f'MRR@{args.k}'])} | "
-                f"{fmt(ndcg)} | {n_used} |"
+                f"| {retriever} | {fmt(d[hr_col])} | {fmt(d[p_col])} | {n_used} |"
             )
         md.append("")
-    # Weighted (threshold-free) section
-    md.append(f"## Weighted by score/6 (threshold-free, range [0, 1])")
-    md.append("")
-    md.append(
-        "Each chunk contributes its score normalized to [0, 1] (perfect 6 = 1.0, "
-        "score 3 = 0.5, score 0 = 0). No binary threshold; the full graded signal "
-        "shapes every metric."
-    )
-    md.append("")
-    md.append(
-        "- **wHR@k** = max(score_i/6) over top-k — best chunk seen\n"
-        "- **wP@k** = mean(score_i/6) over top-k — average chunk quality\n"
-        "- **wMRR@k** = Σ(score_i/6 × 1/rank_i) / Σ(1/rank_i) — rank-weighted "
-        "average quality"
-    )
-    md.append("")
-    md.append(
-        f"| Retriever | wHR@{args.k} | wP@{args.k} | wMRR@{args.k} | "
-        f"NDCG@{args.k} (graded) | n queries |"
-    )
-    md.append("|---|---:|---:|---:|---:|---:|")
-    for retriever in PER_RETRIEVER_INPUTS:
-        w = variant_d[retriever]["weighted_by_score_over_6"]
-        ndcg = variant_d[retriever][f"NDCG@{args.k}_graded"]
-        n_used = w[f"wHR@{args.k}"]["n_queries_used"] if w[f"wHR@{args.k}"] else 0
-        md.append(
-            f"| {retriever} | {fmt(w[f'wHR@{args.k}'])} | "
-            f"{fmt(w[f'wP@{args.k}'])} | {fmt(w[f'wMRR@{args.k}'])} | "
-            f"{fmt(ndcg)} | {n_used} |"
-        )
-    md.append("")
     md.append("---")
     md.append("")
     md.append("## Notes")
     md.append("")
-    md.append(
-        "- NDCG ideal is computed from the **judged pool** for each query "
-        "(the union of retrievers' top-3 that was labeled in the pilot). "
-        "This is the standard convention when judging is incomplete; "
-        "NDCG values are comparable across retrievers but not directly "
-        "comparable to NDCG against the full corpus."
-    )
-    md.append(
-        "- HR / P / MRR are computed only over queries that have at least one "
-        "chunk meeting the threshold (\"n queries\" column)."
-    )
     md.append(
         "- Judge agreement with Opus-4.7 reference labels: 95% at score ≥ 3, "
         "85% at score ≥ 5. See `notes/rubric_design_worked_examples.md` "
