@@ -471,3 +471,46 @@ Plus the rubric definitions, the formula, and the structural constraints. Estima
 4. **Then proceed to Stage 9 / GitHub #14 — full pilot on 100 audit queries.**
 
 If the criteria here look right, we can move to drafting the actual judge prompt.
+
+---
+
+## Tier 1 pilot validation — Qwen judge vs. Opus-4.7 reference labels (2026-05-17)
+
+The 62 (query, chunk) scores tabulated above were produced by **Claude Opus 4.7** while drafting this doc (not by manual human review). They serve as the reference set for validating the production judge.
+
+**Production judge under test**: `Qwen/Qwen3.5-397B-A17B-FP8` with the v2.1 graded rubric, soft thinking-budget 10k, hard cap 25k, temperature 0.
+
+**Pilot run**: `data/audit/v2_pilot_h100_shard0.jsonl` — 1,150 unique (q, c) pairs (100 audit queries × 6 retrievers × top-3, deduped). All 62 reference pairs are inside this set.
+
+### Score-level agreement (Qwen vs. Opus, 62 pairs)
+
+| Metric | Result |
+|---|---|
+| Exact 4-dim agreement (D1+D2+D3+D4 all match) | **32/62 (52%)** |
+| Exact final-score agreement (0–6) | **37/62 (60%)** |
+| Within ±1 on final score | **56/62 (90%)** |
+
+Most disagreements are off-by-one on a single graded dimension. Qwen is somewhat more conservative on D3=2 / D4=2 awards. Only 3 D1 flips (all on q_00536) where Opus called the chunk off-topic and Qwen called it on-topic-but-shallow.
+
+### Threshold-based agreement (precision-relevant)
+
+For Variant D ranking metrics we collapse the 0–6 score to a binary "relevant at threshold T" label. The table below shows Qwen vs. Opus at the four precision-relevant cutoffs:
+
+| Threshold | Reference (Opus) positives | Qwen positives | Agreement | Precision | Recall |
+|---|---|---|---|---|---|
+| **score ≥ 3** | 39/62 | 38/62 | **59/62 (95%)** | 0.97 | 0.95 |
+| **score ≥ 4** | 37/62 | 34/62 | **57/62 (92%)** | 0.97 | 0.89 |
+| **score ≥ 5** | 30/62 | 21/62 | **53/62 (85%)** | 1.00 | 0.70 |
+| **score ≥ 6** | 14/62 | 11/62 | **53/62 (85%)** | 0.73 | 0.57 |
+
+Read: at the **strict (≥5)** threshold, Qwen-positives are a clean subset of Opus-positives (precision 1.00) but Qwen misses 9 chunks Opus considered top-tier (recall 0.70). At **lenient (≥3)** the two agree on 95% of calls. The **≥6 top-anchor** label is the noisiest — Qwen and Opus disagree on roughly 1 in 6 chunks at the maximum-score boundary.
+
+### Reasoning-trace quality (all 1,150 pilot records)
+
+- **Structural coverage**: 1,146/1,150 (99.7%) of traces explicitly reference all four dimensions (D1, D2, D3, D4) by name in the reasoning before emitting JSON.
+- **Length**: median 808 words, mean 1,361 words, max 19,443 (a handful of long deliberations on borderline cases). Soft cap of 10k tokens generally holds.
+- **Manual spot-check** at score=0, score=3, score=6 (random per bucket): reasoning correctly applies the D1 gate, considers each dimension's rubric anchors, and arrives at scores consistent with the criteria. No boilerplate or hallucinated chunk content observed.
+
+### Conclusion
+
+The Qwen judge is reliable as a **binary relevance classifier** at the ≥3 and ≥4 thresholds (P ≥ 0.97, R ≥ 0.89), which is what HR/P/MRR/NDCG@k consume for Variant D. Exact-score agreement is modest (60%) — do not use individual graded scores for absolute calibration, but rank ordering should be sound. The ≥6 max-anchor label should be treated as noisy.
