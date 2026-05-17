@@ -548,3 +548,48 @@ All metrics averaged over the full audit set (n=100); queries with no relevant c
 ### Honest read of the strict numbers
 
 Even the top retrievers deliver a strict-relevant chunk (score ≥ 5) in only ~73% of queries, with ~43% of the top-3 being strict-relevant. The 19 queries where **no retriever's top-3 contained a strict-relevant chunk** are an inherent ceiling — to push past it we'd need either deeper k or a broader candidate pool, not just better re-ranking.
+
+---
+
+## Per-retriever scoreboard — Tier 2 full audit (n=3,185 queries, 2026-05-18)
+
+Computed by `scripts/audit_metrics_v2.py --labels data/audit/v2_full_h100.jsonl --rankings-dir data/full`.
+
+Full audit run: 36,418 (q, c) pairs judged across **3,185 queries** (the entire query set, not just the 100-query audit subset). Same v2 graded rubric and same Qwen3.5-397B-A17B-FP8 judge as Tier 1.
+
+| Retriever | HR (≥3) | P (≥3) | HR (≥5) | P (≥5) | wHR | wP |
+|---|---:|---:|---:|---:|---:|---:|
+| **voyage** | **0.996** | **0.867** | **0.753** | **0.452** | **0.860** | **0.682** |
+| octen      | 0.991 | 0.804 | 0.716 | 0.403 | 0.847 | 0.637 |
+| lateon     | 0.971 | 0.738 | 0.664 | 0.350 | 0.815 | 0.581 |
+| gecko      | 0.814 | 0.477 | 0.439 | 0.193 | 0.662 | 0.393 |
+| bm25       | 0.754 | 0.417 | 0.371 | 0.163 | 0.602 | 0.338 |
+| medcpt     | 0.644 | 0.334 | 0.272 | 0.112 | 0.517 | 0.277 |
+
+All metrics over n=3,185 queries (deployment-honest: queries with no chunk meeting the threshold contribute HR=0 / P=0).
+
+### Tier 1 (n=100) vs Tier 2 (n=3,185) deltas
+
+| Retriever | HR(≥3) T1→T2 | P(≥3) T1→T2 | HR(≥5) T1→T2 | P(≥5) T1→T2 | wHR T1→T2 | wP T1→T2 |
+|---|---:|---:|---:|---:|---:|---:|
+| voyage | 0.990 → 0.996 | 0.820 → **0.867** | 0.730 → 0.753 | 0.430 → 0.452 | 0.847 → 0.860 | 0.657 → 0.682 |
+| octen  | 0.990 → 0.991 | 0.760 → 0.804 | 0.720 → 0.716 | 0.413 → 0.403 | 0.845 → 0.847 | 0.624 → 0.637 |
+| lateon | 0.990 → 0.971 | 0.727 → 0.738 | 0.710 → 0.664 | 0.380 → 0.350 | 0.833 → 0.815 | 0.586 → 0.581 |
+| gecko  | 0.840 → 0.814 | 0.493 → 0.477 | 0.490 → 0.439 | 0.210 → 0.193 | 0.693 → 0.662 | 0.404 → 0.393 |
+| bm25   | 0.740 → 0.754 | 0.413 → 0.417 | 0.390 → 0.371 | 0.163 → 0.163 | 0.613 → 0.602 | 0.336 → 0.338 |
+| medcpt | 0.610 → 0.644 | 0.287 → 0.334 | 0.310 → 0.272 | 0.117 → 0.112 | 0.523 → 0.517 | 0.259 → 0.277 |
+
+### What Tier 2 confirmed vs added
+
+- **Same three-tier ranking**: voyage > octen > lateon ≫ gecko > bm25 > medcpt. Conclusion from Tier 1 holds at full scale.
+- **Voyage clearly best now**. At Tier 1 voyage, octen, lateon all tied at HR(≥3) = 0.990. At n=3,185 the difference is statistically real — voyage's P(≥3) lead over octen widened from 0.06 → 0.06 and now visible in every metric.
+- **Octen vs lateon now separable**. HR(≥3): 0.991 vs 0.971 — small but consistent.
+- **Strict numbers (≥5) drift down for top retrievers** at scale. More queries reveal more "no strict-relevant chunk exists anywhere in the candidate pool" cases — the ceiling of what depth-3 retrieval can achieve over this corpus.
+- **Weighted metrics very stable** (within 0.02 between T1 and T2). The graded signal smooths the per-query noise the binary thresholds expose.
+
+### Run notes
+
+- Both shards used H100, 32 workers each, ~13h wall-clock total (would've been ~9h without one preempt cycle on shard 0).
+- Real per-pod throughput at 32 workers ≈ 0.5-0.7 records/sec — basically the same per-pod throughput we got at 8 workers in Tier 1. The GPU was already saturated at 8 workers for this 17B-active-param MoE model. The 2× speedup we got came from running 2 pods in parallel, not from raising workers per pod.
+- Judge: same `Qwen/Qwen3.5-397B-A17B-FP8` model, same v2_graded prompt (hash `9d2abdfb76b030ea`), same thinking budgets as Tier 1 (soft 10k, hard 25k).
+- 0 errored rows out of 36,418.
