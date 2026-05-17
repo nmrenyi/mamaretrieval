@@ -30,7 +30,10 @@ DEFAULT_OUTPUT_DIM = 2048
 DEFAULT_TOP_K = 20
 
 
-def embed_queries(
+VOYAGE_BATCH_SIZE = 128  # voyage API limits per request
+
+
+def _embed_batch(
     texts: list[str],
     api_key: str,
     model: str,
@@ -64,6 +67,32 @@ def embed_queries(
             time.sleep(backoff)
             backoff = min(backoff * 2, 60)
     raise RuntimeError("unreachable")
+
+
+def embed_queries(
+    texts: list[str],
+    api_key: str,
+    model: str,
+    output_dim: int,
+    max_retries: int = 5,
+    batch_size: int = VOYAGE_BATCH_SIZE,
+) -> tuple[np.ndarray, int]:
+    """Embed in batches; voyage API caps a single request at ~128 inputs."""
+    if len(texts) <= batch_size:
+        return _embed_batch(texts, api_key, model, output_dim, max_retries)
+    all_embs: list[np.ndarray] = []
+    total_tokens = 0
+    n_batches = (len(texts) + batch_size - 1) // batch_size
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i : i + batch_size]
+        print(
+            f"  batch {i // batch_size + 1}/{n_batches} ({len(batch)} queries)",
+            flush=True,
+        )
+        embs, tok = _embed_batch(batch, api_key, model, output_dim, max_retries)
+        all_embs.append(embs)
+        total_tokens += tok
+    return np.concatenate(all_embs, axis=0), total_tokens
 
 
 def main() -> int:

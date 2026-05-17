@@ -32,6 +32,10 @@ data/audit/query_ids.txt
 # Phase 4 per-retriever evaluation artifacts (regenerable)
 data/per_retriever/
 data/per_retriever_labels/
+
+# Tier 2 full-corpus retriever rankings (regenerable from scripts/)
+data/full/
+data/all_query_ids.txt
 # Raw-response side files from v2_graded judge runs (potentially large)
 *.raw.jsonl
 
