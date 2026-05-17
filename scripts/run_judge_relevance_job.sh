@@ -86,8 +86,11 @@ PY
 # Allow torch.compile to finish before NCCL watchdog fires (compile takes ~10min)
 export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=3600
 
-# Start vLLM server in the background
-VLLM_LOG="logs/vllm_judge_shard${SHARD_INDEX}.log"
+# Start vLLM server in the background.
+# VLLM_LOG_SUFFIX lets parallel races (e.g., H200 vs H100 on the same
+# shard index) write to different log files so they don't grep each
+# other's "Application startup complete" line.
+VLLM_LOG="logs/vllm_judge_shard${SHARD_INDEX}${VLLM_LOG_SUFFIX:-}.log"
 vllm serve "$MODEL" \
   --host 0.0.0.0 \
   --port 8000 \
