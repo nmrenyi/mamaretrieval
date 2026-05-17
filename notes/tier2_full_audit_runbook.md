@@ -64,8 +64,12 @@ Write `scripts/extract_phase2b_rankings.py`:
 ### A4. Gecko on remaining 3,085 queries
 
 - Existing runbook: `notes/gecko_eval_runbook.md`.
-- Submit cluster job same as the audit-100 run.
-- Wall-clock: ~1-3 hours.
+- Submit via `scripts/submit_gecko_full.sh` (created 2026-05-17 — modeled on `submit_lateon_audit.sh`).
+- Cluster job, single H100 (TFLite quant is CPU-bound but we ask for 1 GPU for scheduling).
+- Default sqlite is `/lightscratch/users/yiren/mamai-medical-guidelines/processed/embeddings.sqlite` (63,650 chunks). The `model_backup/` sqlite only has 2,826 chunks — wrong corpus version; do not use.
+- Wall-clock: ~1-2 hours, dominated by per-query TFLite embedding.
+
+**Gotcha (2026-05-17)**: the gecko `sanity_check_pairs()` self-test reports `sanity: FAIL` on the cluster — the "unrelated PPH vs jaundice" pair scores 0.308 vs the 0.3 threshold. The failure is borderline (could be TFLite numeric drift across hardware) and the script continues. More importantly, the **margin** between same-topic paraphrases (0.53 low end) and unrelated (0.31) is only ~0.22, vs the 0.6+ a high-capacity model would show. This corroborates the Tier 1 finding that gecko is at its discrimination ceiling for medical chunks — see GitHub issue #17 comment (2026-05-17) for the full diagnosis and implications for the remediation roadmap.
 
 ### A5. Sanity-check
 
