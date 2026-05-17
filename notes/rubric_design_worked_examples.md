@@ -490,7 +490,7 @@ The 62 (query, chunk) scores tabulated above were produced by **Claude Opus 4.7*
 | Exact final-score agreement (0–6) | **37/62 (60%)** |
 | Within ±1 on final score | **56/62 (90%)** |
 
-Most disagreements are off-by-one on a single graded dimension. Qwen is somewhat more conservative on D3=2 / D4=2 awards. Only 3 D1 flips (all on q_00536) where Opus called the chunk off-topic and Qwen called it on-topic-but-shallow.
+**Most disagreements are off-by-one shifts on a single graded dimension** — Qwen is slightly more conservative on D3=2 / D4=2 awards. This is why exact-score agreement (60%) is much lower than within-±1 (90%) and threshold agreement (~90%): a typical mismatch is Opus=5 / Qwen=4, which is a "miss" for exact score but stays on the same side of the ≥3 and ≥4 cutoffs. The off-by-one shifts only flip a threshold call when the boundary sits exactly between the two judges' numbers (e.g., score=4 vs 5 at the ≥5 cutoff). Only 3 D1 flips occurred (all on q_00536), where Opus called the chunk off-topic and Qwen called it on-topic-but-shallow.
 
 ### Threshold-based agreement (precision-relevant)
 
