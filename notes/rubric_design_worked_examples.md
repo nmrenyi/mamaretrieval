@@ -514,3 +514,37 @@ Read: at the **strict (≥5)** threshold, Qwen-positives are a clean subset of O
 ### Conclusion
 
 The Qwen judge is reliable as a **binary relevance classifier** at the ≥3 and ≥4 thresholds (P ≥ 0.97, R ≥ 0.89), which is what HR/P/MRR/NDCG@k consume for Variant D. Exact-score agreement is modest (60%) — do not use individual graded scores for absolute calibration, but rank ordering should be sound. The ≥6 max-anchor label should be treated as noisy.
+
+---
+
+## Per-retriever scoreboard (Variant D, k=3, n=100 queries)
+
+Computed by `scripts/audit_metrics_v2.py` from the v2 pilot labels.
+
+For RAG at k=3 with a long-context LLM (no position bias), **HR and Precision are the operationally meaningful metrics** — "is the information in the bundle?" and "how much of the bundle is useful vs. noise?". MRR / NDCG would matter only if position within top-3 drove downstream behavior.
+
+Three lenses on the same six retrievers:
+- **Binary lenient (≥3)** — relevance threshold on the 0–6 score
+- **Binary strict (≥5)** — top-tier relevance threshold
+- **Weighted (wHR / wP)** — threshold-free; each chunk contributes score/6 ∈ [0, 1]
+
+All metrics averaged over the full audit set (n=100); queries with no relevant chunk in the judged pool contribute HR=0 and P=0 (deployment-honest convention).
+
+| Retriever | HR (≥3) | P (≥3) | HR (≥5) | P (≥5) | wHR | wP |
+|---|---:|---:|---:|---:|---:|---:|
+| **voyage** | **0.990** | **0.820** | **0.730** | **0.430** | **0.847** | **0.657** |
+| octen      | 0.990 | 0.760 | 0.720 | 0.413 | 0.845 | 0.624 |
+| lateon     | 0.990 | 0.727 | 0.710 | 0.380 | 0.833 | 0.586 |
+| gecko      | 0.840 | 0.493 | 0.490 | 0.210 | 0.693 | 0.404 |
+| bm25       | 0.740 | 0.413 | 0.390 | 0.163 | 0.613 | 0.336 |
+| medcpt     | 0.610 | 0.287 | 0.310 | 0.117 | 0.523 | 0.259 |
+
+### Three-tier reading
+
+1. **Top tier — voyage ≈ octen ≈ lateon**: all three deliver any-relevant content in ~99% of queries; precision and weighted scores are nearly indistinguishable. Voyage edges octen on lenient precision (0.82 vs 0.76) but they're effectively tied at the strict threshold.
+2. **Middle — gecko** (the on-device deployed retriever): HR drops to 0.84 lenient / 0.49 strict; precision halves vs. the top tier. Substantial gap.
+3. **Bottom — bm25, medcpt**: bm25's lexical overlap pulls some weight (HR 0.74 lenient) but precision is low; medcpt is the weakest across every metric.
+
+### Honest read of the strict numbers
+
+Even the top retrievers deliver a strict-relevant chunk (score ≥ 5) in only ~73% of queries, with ~43% of the top-3 being strict-relevant. The 19 queries where **no retriever's top-3 contained a strict-relevant chunk** are an inherent ceiling — to push past it we'd need either deeper k or a broader candidate pool, not just better re-ranking.
