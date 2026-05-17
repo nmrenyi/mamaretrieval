@@ -16,7 +16,7 @@ omitted from this report.
 
 Inputs:
   --labels    data/audit/v2_pilot_h100_shard0.jsonl  (v2 graded judgments)
-  per-retriever top-20 files (hardcoded in PER_RETRIEVER_INPUTS)
+  per-retriever top-20 files (hardcoded in per_retriever_inputs)
 
 Outputs:
   --report    data/audit/results_v2.md
@@ -30,14 +30,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-PER_RETRIEVER_INPUTS = {
-    "bm25":   "data/audit/bm25_top20.jsonl",
-    "medcpt": "data/audit/medcpt_top20.jsonl",
-    "octen":  "data/audit/octen_top20.jsonl",
-    "voyage": "data/audit/voyage_top20.jsonl",
-    "lateon": "data/audit/lateon_top20.jsonl",
-    "gecko":  "data/audit/gecko_top20.jsonl",
-}
+RETRIEVERS = ("bm25", "medcpt", "octen", "voyage", "lateon", "gecko")
+DEFAULT_RANKINGS_DIR = "data/audit"  # Tier 1 layout; pass --rankings-dir data/full for Tier 2
 
 
 def stats(xs: list[float]) -> dict | None:
@@ -71,7 +65,12 @@ def main() -> int:
                     help="lenient relevance threshold on the 0–6 score (default 3)")
     ap.add_argument("--strict", type=int, default=5,
                     help="strict relevance threshold (default 5)")
+    ap.add_argument("--rankings-dir", default=DEFAULT_RANKINGS_DIR,
+                    help="dir with <retriever>_top20.jsonl files (use data/full for Tier 2)")
     args = ap.parse_args()
+    per_retriever_inputs = {
+        r: f"{args.rankings_dir}/{r}_top20.jsonl" for r in RETRIEVERS
+    }
 
     # Load v2 labels
     score: dict[tuple[str, str], int] = {}
@@ -105,7 +104,7 @@ def main() -> int:
 
     # Load per-retriever rankings
     ranks: dict[str, dict[str, list[str]]] = {}
-    for retriever, path in PER_RETRIEVER_INPUTS.items():
+    for retriever, path in per_retriever_inputs.items():
         m: dict[str, list[str]] = {}
         for line in Path(path).open():
             rec = json.loads(line)
@@ -143,7 +142,7 @@ def main() -> int:
         return {f"wHR@{k}": stats(whr), f"wP@{k}": stats(wprec)}
 
     per_retriever: dict[str, dict] = {}
-    for retriever in PER_RETRIEVER_INPUTS:
+    for retriever in per_retriever_inputs:
         per_retriever[retriever] = {
             f"binary_lenient(>={args.lenient})":
                 binary_metrics(retriever, rel_lenient),
@@ -241,19 +240,19 @@ def main() -> int:
     # Pull n used per metric family
     lenient_n = next(
         (per_retriever[r][f"binary_lenient(>={args.lenient})"][f"HR@{args.k}"]["n_queries_used"]
-         for r in PER_RETRIEVER_INPUTS
+         for r in per_retriever_inputs
          if per_retriever[r][f"binary_lenient(>={args.lenient})"][f"HR@{args.k}"]),
         0,
     )
     strict_n = next(
         (per_retriever[r][f"binary_strict(>={args.strict})"][f"HR@{args.k}"]["n_queries_used"]
-         for r in PER_RETRIEVER_INPUTS
+         for r in per_retriever_inputs
          if per_retriever[r][f"binary_strict(>={args.strict})"][f"HR@{args.k}"]),
         0,
     )
     weighted_n = next(
         (per_retriever[r]["weighted_by_score_over_6"][f"wHR@{args.k}"]["n_queries_used"]
-         for r in PER_RETRIEVER_INPUTS
+         for r in per_retriever_inputs
          if per_retriever[r]["weighted_by_score_over_6"][f"wHR@{args.k}"]),
         0,
     )
@@ -265,7 +264,7 @@ def main() -> int:
         f"| wHR | wP |"
     )
     md.append("|---|---:|---:|---:|---:|---:|---:|")
-    for retriever in PER_RETRIEVER_INPUTS:
+    for retriever in per_retriever_inputs:
         bl = per_retriever[retriever][f"binary_lenient(>={args.lenient})"]
         bs = per_retriever[retriever][f"binary_strict(>={args.strict})"]
         w  = per_retriever[retriever]["weighted_by_score_over_6"]
