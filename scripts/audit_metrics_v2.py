@@ -125,23 +125,15 @@ def main() -> int:
             prec.append(hits / k)
         return {f"HR@{k}": stats(hr), f"P@{k}": stats(prec)}
 
-    def weighted_metrics(retriever: str, threshold: int,
-                         rel_map: dict[str, set[str]]) -> dict:
-        """Weighted: chunks at score >= threshold contribute score/6; else 0.
-
-        Restricted to queries with at least one chunk meeting the threshold
-        (matches the denominator convention of the binary version).
-        """
+    def weighted_metrics(retriever: str) -> dict:
+        """Threshold-free: each chunk contributes score/6 ∈ [0, 1]."""
         k = args.k
         whr, wprec = [], []
         for q in qids:
-            if not rel_map.get(q):
+            if q not in qid_has_any_judged:
                 continue
             top = ranks[retriever].get(q, [])[:k]
-            top_scores = []
-            for c in top:
-                s = score.get((q, c), 0)
-                top_scores.append(s / 6.0 if s >= threshold else 0.0)
+            top_scores = [score.get((q, c), 0) / 6.0 for c in top]
             while len(top_scores) < k:
                 top_scores.append(0.0)
             whr.append(max(top_scores))
@@ -155,10 +147,8 @@ def main() -> int:
                 binary_metrics(retriever, rel_lenient),
             f"binary_strict(>={args.strict})":
                 binary_metrics(retriever, rel_strict),
-            f"weighted_lenient(>={args.lenient})":
-                weighted_metrics(retriever, args.lenient, rel_lenient),
-            f"weighted_strict(>={args.strict})":
-                weighted_metrics(retriever, args.strict, rel_strict),
+            "weighted_by_score_over_6":
+                weighted_metrics(retriever),
         }
 
     score_dist = {s: sum(1 for v in score.values() if v == s) for s in range(7)}
@@ -225,54 +215,71 @@ def main() -> int:
     md.append("## Definitions (k=3)")
     md.append("")
     md.append(
-        "**Binary HR / P** — chunk is \"relevant\" if its score is ≥ threshold; "
+        "**Binary HR / P** — chunk is \"relevant\" if its score is ≥ threshold, "
         "0 otherwise. "
         "HR = 1 if any chunk in top-k is relevant, else 0. "
-        "P = (count of relevant in top-k) / k."
+        "P = (count of relevant in top-k) / k. "
+        "Denominator excludes queries with no relevant chunk in the judged pool."
     )
     md.append("")
     md.append(
-        "**Weighted HR / P** — chunks at score ≥ threshold contribute score/6 "
-        "(in [0.5, 1.0]); chunks below contribute 0. "
-        "wHR = max contribution over top-k (best chunk seen). "
-        "wP = mean contribution over top-k (average chunk quality)."
-    )
-    md.append("")
-    md.append(
-        "All four variants share the same denominator: only queries with at "
-        "least one chunk meeting the threshold count toward the mean."
+        "**Weighted HR / P (wHR / wP)** — threshold-free. Each chunk contributes "
+        "its normalized score, score/6 ∈ [0, 1] (6 → 1.0, 3 → 0.5, 0 → 0). "
+        "wHR = max contribution in top-k (best chunk seen). "
+        "wP = mean contribution in top-k (average chunk quality). "
+        "Denominator is all queries."
     )
     md.append("")
     md.append("---")
     md.append("")
+    md.append("## Per-retriever metrics @ k=3")
+    md.append("")
 
-    # Four tables, one per (binary/weighted) × (lenient/strict) combo
-    table_specs = [
-        (f"binary_lenient(>={args.lenient})",
-         f"Binary, lenient (score ≥ {args.lenient})",
-         f"HR@{args.k}", f"P@{args.k}"),
-        (f"binary_strict(>={args.strict})",
-         f"Binary, strict (score ≥ {args.strict})",
-         f"HR@{args.k}", f"P@{args.k}"),
-        (f"weighted_lenient(>={args.lenient})",
-         f"Weighted, lenient (score ≥ {args.lenient}, others → 0)",
-         f"wHR@{args.k}", f"wP@{args.k}"),
-        (f"weighted_strict(>={args.strict})",
-         f"Weighted, strict (score ≥ {args.strict}, others → 0)",
-         f"wHR@{args.k}", f"wP@{args.k}"),
-    ]
-    for key, title, hr_col, p_col in table_specs:
-        md.append(f"## {title}")
-        md.append("")
-        md.append(f"| Retriever | {hr_col} | {p_col} | n queries |")
-        md.append("|---|---:|---:|---:|")
-        for retriever in PER_RETRIEVER_INPUTS:
-            d = per_retriever[retriever][key]
-            n_used = d[hr_col]["n_queries_used"] if d[hr_col] else 0
-            md.append(
-                f"| {retriever} | {fmt(d[hr_col])} | {fmt(d[p_col])} | {n_used} |"
-            )
-        md.append("")
+    # Pull n used per metric family
+    lenient_n = next(
+        (per_retriever[r][f"binary_lenient(>={args.lenient})"][f"HR@{args.k}"]["n_queries_used"]
+         for r in PER_RETRIEVER_INPUTS
+         if per_retriever[r][f"binary_lenient(>={args.lenient})"][f"HR@{args.k}"]),
+        0,
+    )
+    strict_n = next(
+        (per_retriever[r][f"binary_strict(>={args.strict})"][f"HR@{args.k}"]["n_queries_used"]
+         for r in PER_RETRIEVER_INPUTS
+         if per_retriever[r][f"binary_strict(>={args.strict})"][f"HR@{args.k}"]),
+        0,
+    )
+    weighted_n = next(
+        (per_retriever[r]["weighted_by_score_over_6"][f"wHR@{args.k}"]["n_queries_used"]
+         for r in PER_RETRIEVER_INPUTS
+         if per_retriever[r]["weighted_by_score_over_6"][f"wHR@{args.k}"]),
+        0,
+    )
+
+    md.append(
+        f"| Retriever "
+        f"| HR (≥{args.lenient}) | P (≥{args.lenient}) "
+        f"| HR (≥{args.strict}) | P (≥{args.strict}) "
+        f"| wHR | wP |"
+    )
+    md.append("|---|---:|---:|---:|---:|---:|---:|")
+    for retriever in PER_RETRIEVER_INPUTS:
+        bl = per_retriever[retriever][f"binary_lenient(>={args.lenient})"]
+        bs = per_retriever[retriever][f"binary_strict(>={args.strict})"]
+        w  = per_retriever[retriever]["weighted_by_score_over_6"]
+        md.append(
+            f"| {retriever} "
+            f"| {fmt(bl[f'HR@{args.k}'])} | {fmt(bl[f'P@{args.k}'])} "
+            f"| {fmt(bs[f'HR@{args.k}'])} | {fmt(bs[f'P@{args.k}'])} "
+            f"| {fmt(w[f'wHR@{args.k}'])} | {fmt(w[f'wP@{args.k}'])} |"
+        )
+    md.append("")
+    md.append(
+        f"Denominator (number of queries averaged): "
+        f"binary lenient n={lenient_n}, "
+        f"binary strict n={strict_n}, "
+        f"weighted n={weighted_n}."
+    )
+    md.append("")
     md.append("---")
     md.append("")
     md.append("## Notes")
