@@ -113,12 +113,14 @@ def main() -> int:
         ranks[retriever] = m
 
     def binary_metrics(retriever: str, rel_map: dict[str, set[str]]) -> dict:
+        """HR / P over all judged queries. Queries with no chunk meeting the
+        threshold contribute HR=0 and P=0 (deployment-honest convention)."""
         k = args.k
         hr, prec = [], []
         for q in qids:
-            rel = rel_map.get(q, set())
-            if not rel:
+            if q not in qid_has_any_judged:
                 continue
+            rel = rel_map.get(q, set())
             top = ranks[retriever].get(q, [])[:k]
             hits = sum(1 for c in top if c in rel)
             hr.append(1.0 if hits > 0 else 0.0)
@@ -219,7 +221,8 @@ def main() -> int:
         "0 otherwise. "
         "HR = 1 if any chunk in top-k is relevant, else 0. "
         "P = (count of relevant in top-k) / k. "
-        "Denominator excludes queries with no relevant chunk in the judged pool."
+        "Averaged over **all** judged queries; queries with no relevant chunk "
+        "in the pool contribute HR=0 and P=0 (deployment-honest convention)."
     )
     md.append("")
     md.append(
@@ -274,10 +277,7 @@ def main() -> int:
         )
     md.append("")
     md.append(
-        f"Denominator (number of queries averaged): "
-        f"binary lenient n={lenient_n}, "
-        f"binary strict n={strict_n}, "
-        f"weighted n={weighted_n}."
+        f"All metrics averaged over n={lenient_n} queries (the full audit set)."
     )
     md.append("")
     md.append("---")
