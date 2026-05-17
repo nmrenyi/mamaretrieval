@@ -137,6 +137,32 @@ def main() -> int:
             f"MRR@{k}": stats(mrr),
         }
 
+    def weighted_metrics(retriever: str) -> dict:
+        """Threshold-free weighted variants — each chunk contributes score/6."""
+        k = args.k
+        whr, wprec, wmrr = [], [], []
+        rank_weights = [1.0 / (i + 1) for i in range(k)]  # 1/1, 1/2, 1/3, ...
+        rank_sum = sum(rank_weights)
+        for q in qids:
+            # Use any query that has at least one judged chunk in the pool
+            if not qid_scores.get(q):
+                continue
+            top = ranks[retriever].get(q, [])[:k]
+            top_scores = [score.get((q, c), 0) / 6.0 for c in top]
+            # Pad with 0 if retriever returned fewer than k
+            while len(top_scores) < k:
+                top_scores.append(0.0)
+            whr.append(max(top_scores))
+            wprec.append(sum(top_scores) / k)
+            wmrr.append(
+                sum(s * w for s, w in zip(top_scores, rank_weights)) / rank_sum
+            )
+        return {
+            f"wHR@{k}": stats(whr),
+            f"wP@{k}": stats(wprec),
+            f"wMRR@{k}": stats(wmrr),
+        }
+
     def ndcg_for(retriever: str) -> dict | None:
         k = args.k
         out = []
@@ -157,6 +183,7 @@ def main() -> int:
         variant_d[retriever] = {
             f"lenient_score>={args.lenient}": metrics_for(retriever, rel_lenient),
             f"strict_score>={args.strict}": metrics_for(retriever, rel_strict),
+            "weighted_by_score_over_6": weighted_metrics(retriever),
             f"NDCG@{args.k}_graded": ndcg_for(retriever),
         }
 
@@ -236,6 +263,37 @@ def main() -> int:
                 f"{fmt(ndcg)} | {n_used} |"
             )
         md.append("")
+    # Weighted (threshold-free) section
+    md.append(f"## Weighted by score/6 (threshold-free, range [0, 1])")
+    md.append("")
+    md.append(
+        "Each chunk contributes its score normalized to [0, 1] (perfect 6 = 1.0, "
+        "score 3 = 0.5, score 0 = 0). No binary threshold; the full graded signal "
+        "shapes every metric."
+    )
+    md.append("")
+    md.append(
+        "- **wHR@k** = max(score_i/6) over top-k — best chunk seen\n"
+        "- **wP@k** = mean(score_i/6) over top-k — average chunk quality\n"
+        "- **wMRR@k** = Σ(score_i/6 × 1/rank_i) / Σ(1/rank_i) — rank-weighted "
+        "average quality"
+    )
+    md.append("")
+    md.append(
+        f"| Retriever | wHR@{args.k} | wP@{args.k} | wMRR@{args.k} | "
+        f"NDCG@{args.k} (graded) | n queries |"
+    )
+    md.append("|---|---:|---:|---:|---:|---:|")
+    for retriever in PER_RETRIEVER_INPUTS:
+        w = variant_d[retriever]["weighted_by_score_over_6"]
+        ndcg = variant_d[retriever][f"NDCG@{args.k}_graded"]
+        n_used = w[f"wHR@{args.k}"]["n_queries_used"] if w[f"wHR@{args.k}"] else 0
+        md.append(
+            f"| {retriever} | {fmt(w[f'wHR@{args.k}'])} | "
+            f"{fmt(w[f'wP@{args.k}'])} | {fmt(w[f'wMRR@{args.k}'])} | "
+            f"{fmt(ndcg)} | {n_used} |"
+        )
+    md.append("")
     md.append("---")
     md.append("")
     md.append("## Notes")
