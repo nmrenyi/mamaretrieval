@@ -5,6 +5,8 @@ The final artifact is a set of clinical queries paired with relevant guideline
 chunk IDs, used to evaluate retrievers and to provide oracle context for
 generator faithfulness checks.
 
+> **Released on Hugging Face**: [`nmrenyi/mamaretrieval`](https://huggingface.co/datasets/nmrenyi/mamaretrieval) — `v0.1.0` ships the Tier 2 top-3 union (3,185 queries × 6 retrievers, 36,418 graded labels). Build script: [`scripts/build_hf_release.py`](scripts/build_hf_release.py). License: research use only — see the dataset card.
+
 The benchmark is built from the production guideline corpus at:
 
 ```text
