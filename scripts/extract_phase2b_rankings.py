@@ -24,7 +24,7 @@ import json
 import sys
 from pathlib import Path
 
-RETRIEVERS = ("bm25", "medcpt", "octen")
+DEFAULT_RETRIEVERS = ("bm25", "medcpt", "octen")
 
 
 def main() -> int:
@@ -32,14 +32,17 @@ def main() -> int:
     p.add_argument("--candidates", default="data/candidates.jsonl")
     p.add_argument("--output-dir", default="data/full")
     p.add_argument("--top-k", type=int, default=10,
-                   help="how many ranks to keep per retriever (max 10 in Phase 2b)")
+                   help="how many ranks to keep per retriever (max 10 in Phase 2b; up to 20 in Tier 3)")
+    p.add_argument("--retrievers", default=",".join(DEFAULT_RETRIEVERS),
+                   help="comma-separated subset to extract (default: bm25,medcpt,octen)")
     args = p.parse_args()
+    retrievers = tuple(r.strip() for r in args.retrievers.split(",") if r.strip())
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # rows[retriever] = list of output records
-    rows: dict[str, list[str]] = {r: [] for r in RETRIEVERS}
+    rows: dict[str, list[str]] = {r: [] for r in retrievers}
     n_queries = 0
 
     for line in Path(args.candidates).open():
@@ -47,7 +50,7 @@ def main() -> int:
         qid = r["query_id"]
         candidates = r["candidates"]
         n_queries += 1
-        for retr in RETRIEVERS:
+        for retr in retrievers:
             field = f"{retr}_rank"
             ranked = [(c["chunk_id"], c[field]) for c in candidates if c.get(field) is not None]
             ranked.sort(key=lambda x: x[1])
@@ -62,7 +65,7 @@ def main() -> int:
             }
             rows[retr].append(json.dumps(rec))
 
-    for retr in RETRIEVERS:
+    for retr in retrievers:
         path = out_dir / f"{retr}_top20.jsonl"
         path.write_text("\n".join(rows[retr]) + "\n")
         size_counts = [json.loads(line)["top_k"] for line in rows[retr]]

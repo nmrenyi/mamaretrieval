@@ -23,7 +23,8 @@ SHARD_COUNT="${SHARD_COUNT:-5}"
 RETRIEVERS="${RETRIEVERS:-bm25,medcpt,octen}"
 TOP_K="${TOP_K:-10}"
 QUERIES_PATH="${QUERIES_PATH:-data/queries.jsonl}"
-OUTPUT_PATH="${OUTPUT_PATH:-}"
+OUTPUT_PREFIX="${OUTPUT_PREFIX:-}"  # base path; each shard writes ${OUTPUT_PREFIX}_shard${SHARD_INDEX}.jsonl
+OUTPUT_PATH="${OUTPUT_PATH:-}"      # legacy; if set with literal ${SHARD_INDEX}, run script expands inside the pod
 BATCH_SIZE="${BATCH_SIZE:-64}"
 DEVICE="${DEVICE:-cuda}"
 CACHE_DIR="${CACHE_DIR:-$REPO_DIR/.cache}"
@@ -50,6 +51,12 @@ rsync -av "$LOCAL_ROOT/$QUERIES_PATH" "$SERVER_ROOT/$QUERIES_PATH"
 echo "Submitting $SHARD_COUNT shard jobs..."
 for shard in $(seq 0 $((SHARD_COUNT - 1))); do
   JOB_NAME="${JOB_PREFIX}-shard${shard}"
+  # Per-shard output path. OUTPUT_PREFIX takes priority; legacy OUTPUT_PATH still works.
+  if [[ -n "$OUTPUT_PREFIX" ]]; then
+    SHARD_OUTPUT_PATH="${OUTPUT_PREFIX}_shard${shard}.jsonl"
+  else
+    SHARD_OUTPUT_PATH="$OUTPUT_PATH"
+  fi
   ssh "$SERVER" "runai delete job '$JOB_NAME' --project '$PROJECT' >/dev/null 2>&1 || true"
   ssh "$SERVER" runai submit "$JOB_NAME" \
     --image "$IMAGE" \
@@ -69,7 +76,7 @@ for shard in $(seq 0 $((SHARD_COUNT - 1))); do
     -e RETRIEVERS="$RETRIEVERS" \
     -e TOP_K="$TOP_K" \
     -e QUERIES_PATH="$QUERIES_PATH" \
-    -e OUTPUT_PATH="$OUTPUT_PATH" \
+    -e OUTPUT_PATH="$SHARD_OUTPUT_PATH" \
     -e BATCH_SIZE="$BATCH_SIZE" \
     -e DEVICE="$DEVICE" \
     -e CACHE_DIR="$CACHE_DIR" \
