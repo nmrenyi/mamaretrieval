@@ -1,0 +1,71 @@
+{
+  "name": "mamaretrieval",
+  "version": "v0.1.0",
+  "release_date": "2026-05-19",
+  "description": "Per-retriever evaluation of 6 retrievers on 3,185 midwifery / OBGYN queries against the rag-bundle-v0.2.0 corpus, graded by an LLM judge under a 4-dimension rubric (D1 topic, D2 meaningful, D3 actionable, D4 density; score = d1 \u00d7 (d2 + d3 + d4) \u2208 [0..6]).",
+  "scope": "Tier 2: union of top-3 from 6 retrievers. v0.2.0 will extend to top-20 union when Tier 3 lands.",
+  "judge": {
+    "model": "Qwen/Qwen3.5-397B-A17B-FP8",
+    "prompt_hash": "9d2abdfb76b030ea",
+    "schema_version": "v-88c09262",
+    "prompt_file": "audit/judge_relevance_prompt.txt"
+  },
+  "query_generator": {
+    "model": "Qwen/Qwen3.6-27B-FP8",
+    "prompt_hash": "1bf02ec4c75c580e",
+    "schema_version": "v-c2419971",
+    "prompt_file": "audit/query_generation_prompt.txt"
+  },
+  "retrievers": [
+    {
+      "name": "bm25",
+      "model": "BM25 (lexical baseline)"
+    },
+    {
+      "name": "medcpt",
+      "model": "ncbi/MedCPT (Query+Article Encoders)"
+    },
+    {
+      "name": "octen",
+      "model": "Octen/Octen-Embedding-8B"
+    },
+    {
+      "name": "voyage",
+      "model": "voyage-4-large"
+    },
+    {
+      "name": "lateon",
+      "model": "lightonai/GTE-ModernColBERT-v1"
+    },
+    {
+      "name": "gecko",
+      "model": "gecko-1024-quant-v0.2.0 (on-device TFLite)"
+    }
+  ],
+  "top_k": 3,
+  "corpus": {
+    "bundle": "rag-bundle-v0.2.0",
+    "producer_commit": "a1abe003cce742b46954375d17abb28a3e27110f"
+  },
+  "configs": {
+    "queries": {
+      "rows": 3185
+    },
+    "rankings": {
+      "rows": 57330,
+      "depth": 3
+    },
+    "judgments": {
+      "rows": 36418
+    },
+    "judgments_with_reasoning": {
+      "rows": 36418,
+      "extra_columns": [
+        "thinking"
+      ]
+    },
+    "chunks": {
+      "rows": 17827
+    }
+  }
+}

@@ -48,6 +48,13 @@ data/all_query_ids.txt
 cache/
 data/candidates*.jsonl
 
+# HF release bundles — large parquet artifacts and preview folders are
+# regenerable via scripts/build_hf_release.py. Only hand-authored content
+# (README, LICENSE, manifest, verbatim prompt files) is tracked.
+releases/*-previews/
+releases/*/data/
+releases/*/audit/*.parquet
+
 # Logs and local outputs
 *.log
 tmp/
