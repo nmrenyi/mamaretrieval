@@ -22,7 +22,7 @@ RAW1="$SCRATCH/data/audit/v2_top20_new_h100_shard1.raw.jsonl"
 TARGET_TOTAL=194546
 TARGET_PER_SHARD=$((TARGET_TOTAL / 2))
 
-MAX_ATTEMPTS=10
+MAX_ATTEMPTS=50
 
 state_0=""; load_0=-1; ready_0=0; judge_0=0; lines_0=0; ts_0=0; att_0=1; success_0=0
 state_1=""; load_1=-1; ready_1=0; judge_1=0; lines_1=0; ts_1=0; att_1=1; success_1=0
@@ -45,7 +45,7 @@ resubmit() {
   eval "cur_att=\$att_$shard"
   new_att=$((cur_att + 1))
   emit "[shard $shard] RESUBMIT attempt $new_att/$MAX_ATTEMPTS"
-  ssh_safe "runai delete job $job --project $PROJ --suppress-deprecation-message 2>&1" \
+  runai delete job "$job" --project "$PROJ" --suppress-deprecation-message 2>&1 \
     | tail -2 | sed "s/^/  delete: /"
   sleep 15
   cd "$LOCAL_REPO"
@@ -81,7 +81,7 @@ while true; do
     state_var="state_$shard"
     eval "prev_state=\$$state_var"
 
-    state=$(ssh_safe "runai describe job $job --project $PROJ --suppress-deprecation-message 2>/dev/null | grep -E '^Status' | awk '{print \$2}'")
+    state=$(runai describe job "$job" --project "$PROJ" --suppress-deprecation-message 2>/dev/null | grep -E '^Status' | awk '{print $2}')
     if [ -n "$state" ] && [ "$state" != "$prev_state" ]; then
       eval "att_val=\$att_$shard"
       emit "[shard $shard a=$att_val] STATE: $prev_state -> $state"
@@ -101,7 +101,7 @@ while true; do
       Failed|Error)
         emit "[shard $shard] TERMINAL FAILURE: $state"
         sleep 60
-        recheck=$(ssh_safe "runai describe job $job --project $PROJ --suppress-deprecation-message 2>/dev/null | grep -E '^Status' | awk '{print \$2}'")
+        recheck=$(runai describe job "$job" --project "$PROJ" --suppress-deprecation-message 2>/dev/null | grep -E '^Status' | awk '{print $2}')
         if [ "$recheck" = "Running" ] || [ "$recheck" = "Pending" ]; then
           emit "[shard $shard recovered] state is now $recheck"
           eval "$state_var='$recheck'"

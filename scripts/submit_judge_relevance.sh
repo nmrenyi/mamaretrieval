@@ -60,8 +60,8 @@ rsync -av "$LOCAL_ROOT/$INPUT_PATH" "$SERVER_ROOT/$INPUT_PATH"
 echo "Submitting $SHARD_COUNT shard jobs..."
 for shard in $(seq 0 $((SHARD_COUNT - 1))); do
   JOB_NAME="${JOB_PREFIX}-shard${shard}"
-  ssh "$SERVER" "runai delete job '$JOB_NAME' --project '$PROJECT' >/dev/null 2>&1 || true"
-  ssh "$SERVER" runai submit "$JOB_NAME" \
+  runai delete job "$JOB_NAME" --project "$PROJECT" >/dev/null 2>&1 || true
+  runai submit "$JOB_NAME" \
     --image "$IMAGE" \
     --pvc light-scratch:/lightscratch \
     --gpu "$TENSOR_PARALLEL" \
