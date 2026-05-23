@@ -107,3 +107,81 @@ Even the best retriever (voyage) surfaces a strict-relevant (score ≥ 5) chunk 
 ## Follow-ups
 
 - [#17](https://github.com/nmrenyi/mamaretrieval/issues/17) — Gecko on-device retrieval gap: prioritized options to close the gecko vs voyage gap (threshold calibration, embedding bake-off, fine-tune, distillation).
+
+---
+
+## Tier 3 — Full top-20 union judging (n=3,185 queries, 230,964 pairs)
+
+Tier 3 expanded the judged pool from each retriever's top-3 (Tier 2) to each retriever's **top-20** chunks. Result: **230,964 (q, c) pairs judged** (Tier 2's 36,418 + 194,546 new pairs at ranks 4-20 of the union). Same Qwen3.5-397B-A17B-FP8 judge, same v2 graded rubric, same thinking budgets.
+
+The Tier 3 labels enable two analyses that Tier 2 couldn't support:
+1. **HR / Precision at deeper k** (k=5, 10, 20) — does going deeper help the weaker retrievers?
+2. **Pool Recall** — of all relevant chunks discovered by the union of 6 retrievers, what fraction does each retriever's top-k capture? Diagnostic for "MISS vs RANK".
+
+### Run notes
+
+- Both shards used H100, 32 workers each.
+- Total wall-clock: **~5 days** (vs ~13h for Tier 2's 36k pairs at the same throughput). The bulk of the time was lost to cluster preemption — our 2-shard request (16 GPUs) was 1 GPU over the project's 15-GPU deserved quota, making the over-quota shard preemptible. Once shard 0 finished, the single remaining shard (8 GPUs) was within quota and ran preempt-free for ~10 hours straight until completion.
+- **Lesson**: future multi-shard judge runs should size tensor-parallel so total GPU usage ≤ 15 (the project's deserved quota), e.g. 1 large shard with 8 GPUs instead of 2 over-quota shards. Single-shard at 8 GPUs averages ~0.6 records/sec — for 200k pairs that's ~4 days of pure judging, still painful but at least preempt-free.
+- Judge: same Qwen3.5-397B-A17B-FP8 model, v2_graded prompt hash 9d2abdfb76b030ea, soft thinking budget 10k, hard cap 25k.
+- 0 errored rows out of 230,964.
+
+### HR / Precision at varying k — Binary lenient (score ≥ 3)
+
+| Retriever | HR@3 | HR@5 | HR@10 | HR@20 | P@3 | P@5 | P@10 | P@20 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| **voyage** | **0.996** | **0.999** | **1.000** | **1.000** | **0.867** | **0.816** | **0.725** | **0.614** |
+| octen      | 0.991 | 0.996 | 0.999 | 0.999 | 0.804 | 0.747 | 0.651 | 0.542 |
+| lateon     | 0.971 | 0.985 | 0.995 | 0.998 | 0.738 | 0.662 | 0.555 | 0.451 |
+| gecko      | 0.814 | 0.895 | 0.950 | 0.977 | 0.477 | 0.435 | 0.370 | 0.305 |
+| bm25       | 0.754 | 0.833 | 0.907 | 0.952 | 0.417 | 0.367 | 0.299 | 0.239 |
+| medcpt     | 0.644 | 0.745 | 0.859 | 0.926 | 0.334 | 0.302 | 0.258 | 0.213 |
+
+### HR / Precision at varying k — Binary strict (score ≥ 5)
+
+| Retriever | HR@3 | HR@5 | HR@10 | HR@20 | P@3 | P@5 | P@10 | P@20 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| **voyage** | **0.753** | **0.819** | **0.883** | **0.918** | **0.452** | **0.402** | **0.329** | **0.252** |
+| octen      | 0.716 | 0.790 | 0.855 | 0.901 | 0.403 | 0.353 | 0.282 | 0.215 |
+| lateon     | 0.664 | 0.734 | 0.814 | 0.872 | 0.350 | 0.294 | 0.230 | 0.170 |
+| gecko      | 0.439 | 0.547 | 0.663 | 0.755 | 0.193 | 0.169 | 0.136 | 0.105 |
+| bm25       | 0.371 | 0.457 | 0.570 | 0.666 | 0.163 | 0.139 | 0.108 | 0.080 |
+| medcpt     | 0.272 | 0.347 | 0.464 | 0.586 | 0.112 | 0.099 | 0.082 | 0.065 |
+
+### Pool Recall — lenient (score ≥ 3)
+
+Of the chunks judged relevant in the 6-retriever top-20 union pool, what fraction does THIS retriever's top-k capture?
+
+| Retriever | Pool R@3 | Pool R@5 | Pool R@10 | Pool R@20 |
+|---|---:|---:|---:|---:|
+| **voyage** | **0.176** | **0.258** | **0.421** | **0.658** |
+| octen      | 0.164 | 0.236 | 0.378 | 0.583 |
+| lateon     | 0.151 | 0.210 | 0.324 | 0.489 |
+| gecko      | 0.101 | 0.143 | 0.221 | 0.337 |
+| bm25       | 0.088 | 0.122 | 0.183 | 0.271 |
+| medcpt     | 0.071 | 0.101 | 0.159 | 0.244 |
+
+### Key findings from Tier 3
+
+1. **HR@3 numbers are identical to Tier 2** (same top-3 chunks judged in both tiers). The new value is at k=5, 10, 20 and in Pool Recall.
+
+2. **Gecko's gap is mostly a ranking problem (at lenient), but also a real retrieval gap (at strict)**:
+   - At lenient (≥3): gecko HR@3 = 0.81 → HR@20 = 0.98 — the chunks ARE in gecko's pool, just not in its top-3. Depth-based interventions (issue #17 option 1: threshold calibration, or retrieving deeper) could substantially close this gap.
+   - At strict (≥5): gecko HR@3 = 0.44 → HR@20 = 0.76 — even at k=20, gecko misses ~24% of queries where voyage finds strict content at k=3. This is a real retrieval gap, not just ranking.
+
+3. **Pool Recall sharply discriminates the two tiers**: voyage captures 66% of pool relevance at k=20; gecko only 34%. Gecko misses about half of the discoverable relevance entirely — never surfaces it in its top-20.
+
+4. **The voyage/octen/lateon cluster** stays clearly above the gecko/bm25/medcpt cluster at every depth. The depth-3-only conclusion holds; deeper-k just shrinks gaps on the easier (lenient) metric.
+
+### Implications for issue #17 (gecko remediation)
+
+- **Threshold calibration (option 1)** can address the ~15% lenient HR gap (gecko@3 → gecko@10 worth of relevance) by raising the bar on what gecko returns and falling back to "I don't know" when low confidence. Doesn't fix the structural ~33% pool-recall gap.
+- **Embedding bake-off (option 2)** or **distillation from voyage (option 5)** remain the most promising paths to actually close the pool-recall gap. The Tier 3 numbers strengthen the case: this isn't only ranking — gecko's embeddings genuinely fail to find relevant content for many queries.
+
+### Source files
+
+- Tier 3 results: `data/audit/results_v2_tier3.{md,json}`
+- Full top-20 labels (Tier 2 + Tier 3): `data/audit/v2_top20_all.jsonl` (230,964 pairs)
+- New-only Tier 3 labels: `data/audit/v2_top20_new.jsonl` (194,546 pairs)
+- Raw thinking traces (Tier 3 only): `data/audit/v2_top20_new_h100_shard{0,1}.raw.jsonl`
+- Metrics regen: `python3 scripts/audit_metrics_tier3.py`
