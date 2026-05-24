@@ -1,0 +1,72 @@
+MamaRetrieval — Research-Only License v1
+========================================
+
+This dataset ("the Dataset") is released by the maintainer
+(see the dataset card / README.md) for non-commercial academic research
+and retrieval-evaluation benchmarking only. By downloading, accessing,
+copying, or using the Dataset, in whole or in part, you agree to the
+following terms.
+
+1. Permitted use
+----------------
+The following uses are permitted without further written permission:
+
+  (a) Academic research, including publication of aggregate metrics,
+      qualitative analysis, ablations, error analysis, and methodology
+      comparisons.
+  (b) Use of the Dataset as an evaluation benchmark for retrieval
+      systems, including running new retrievers or alternative judges
+      against the included (query, chunk) pairs.
+  (c) Use of the rubric, prompts, manifest, and structured metadata
+      for methodology research.
+
+2. Prohibited use
+-----------------
+The following are prohibited without explicit written permission from
+the maintainer:
+
+  (a) Any commercial use, including but not limited to evaluation as
+      part of internal product decisions at for-profit organisations,
+      paid consulting deliverables, or commercial publications.
+  (b) Use of the chunk text contained in chunks.parquet as training
+      data for any model — generative, embedding, retrieval,
+      classification, or otherwise — at any stage of training,
+      fine-tuning, or instruction-tuning.
+  (c) Redistribution of the chunk text, in whole or in part, outside
+      the form shipped in this Dataset. This includes extracting
+      chunks.parquet, repackaging the content into another dataset,
+      mirroring, or re-hosting.
+  (d) Production deployment of any system whose retrieval, ranking,
+      or judging behaviour has been tuned, calibrated, or otherwise
+      adapted using the Dataset.
+  (e) Clinical use of the chunk text. The chunk content has NOT been
+      reviewed for clinical accuracy in the form presented here. Do
+      not surface chunk text to patients, clinicians, or any
+      end-user clinical workflow.
+
+3. Upstream licensing
+---------------------
+The chunk text was assembled from a corpus that mixes open-licensed
+sources (some under variants of CC BY-NC-SA) with closed-licensed
+clinical references. This License does NOT relicense or grant any
+rights over the underlying upstream content beyond the research-use
+scope set out in Section 1. Where a use case is not strictly
+research evaluation under Section 1, independent verification of
+upstream licensing for each chunk source is the user's responsibility.
+
+4. No warranty
+--------------
+The Dataset is provided "as is", without warranty of any kind,
+express or implied. The maintainer makes no representations about
+the clinical accuracy, completeness, currency, or suitability of the
+chunk text or the LLM-generated judgments for any purpose.
+
+5. Attribution
+--------------
+Any publication or public use under Section 1 must cite the Dataset
+as indicated in the Citation section of the dataset card.
+
+6. Contact
+----------
+If your intended use does not fit cleanly within Section 1, contact
+the maintainer (see dataset card) before proceeding.

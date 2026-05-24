@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Build the v0.1.0 HuggingFace release bundle for ``nmrenyi/mamaretrieval``.
+"""Build the v0.2.0 HuggingFace release bundle for ``nmrenyi/mamaretrieval``.
 
-Reads the Arc-2 / Tier-2 artefacts under ``data/`` and emits a release tree
-under ``releases/mamaretrieval-hf-v0.1.0/`` split across two folders:
+Reads the Tier-3 artefacts under ``data/`` and emits a release tree
+under ``releases/mamaretrieval-hf-v0.2.0/`` split across two folders:
 
 ``data/``  — the primary eval artefacts (parquet configs):
 - ``queries``    — 3,185 query records
-- ``rankings``   — top-3 of each of 6 retrievers (long table)
-- ``judgments``  — 36,418 v2-graded labels (no reasoning)
+- ``rankings``   — top-20 of each of 6 retrievers (long table)
+- ``judgments``  — 230,964 v2-graded labels (no reasoning)
 - ``chunks``     — chunk text
 
 ``audit/`` — provenance / reasoning trail (referenced from manifest, not
@@ -15,6 +15,9 @@ required to use the eval but useful for understanding how it was made):
 - ``judgments_with_reasoning.parquet`` — judgments + the judge's ``thinking``
 - ``query_generation_prompt.txt``      — verbatim generator prompt
 - ``judge_relevance_prompt.txt``       — verbatim judge prompt
+
+To rebuild the prior v0.1.0 bundle (top-3 union, 36k labels), check out the
+script at commit 02127e3 (``git show 02127e3:scripts/build_hf_release.py``).
 
 Chunk text comes from the released ``rag-bundle-v0.2.0`` tarball on the
 ``mamai-medical-guidelines`` GitHub release — the script downloads, verifies
@@ -74,7 +77,8 @@ RETRIEVER_MODELS: dict[str, str] = {
     "gecko":  "gecko-1024-quant-v0.2.0 (on-device TFLite)",
 }
 RETRIEVERS = list(RETRIEVER_MODELS.keys())
-TOP_K = 3
+TOP_K = 20
+VERSION = "v0.2.0"
 
 
 def _sha256(path: Path) -> str:
@@ -212,10 +216,15 @@ def build_rankings(repo_root: Path, out_dir: Path) -> tuple[int, set[str]]:
 def build_judgments(
     repo_root: Path, data_dir: Path, audit_dir: Path
 ) -> tuple[int, set[str]]:
-    clean_path = repo_root / "data" / "audit" / "v2_full_h100.jsonl"
+    # v0.2.0: full top-20 union = Tier 2 top-3 labels + Tier 3 ranks 4-20 labels.
+    # Raw thinking traces are split across 4 shard files (2 from Tier 2, 2 from
+    # Tier 3) and indexed by (query_id, chunk_id) so the join is order-agnostic.
+    clean_path = repo_root / "data" / "audit" / "v2_top20_all.jsonl"
     raw_shards = [
         repo_root / "data" / "audit" / "v2_full_h100_shard0.raw.jsonl",
         repo_root / "data" / "audit" / "v2_full_h100_shard1.raw.jsonl",
+        repo_root / "data" / "audit" / "v2_top20_new_h100_shard0.raw.jsonl",
+        repo_root / "data" / "audit" / "v2_top20_new_h100_shard1.raw.jsonl",
     ]
     thinking: dict[tuple[str, str], str] = {}
     for shard in raw_shards:
@@ -384,7 +393,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--out",
-        default="releases/mamaretrieval-hf-v0.1.0",
+        default=f"releases/mamaretrieval-hf-{VERSION}",
         help="Output directory (relative to repo root unless absolute).",
     )
     args = parser.parse_args()
@@ -431,7 +440,7 @@ def main() -> None:
 
     manifest = {
         "name": "mamaretrieval",
-        "version": "v0.1.0",
+        "version": VERSION,
         "release_date": date.today().isoformat(),
         "description": (
             "Per-retriever evaluation of 6 retrievers on 3,185 midwifery / "
@@ -441,9 +450,15 @@ def main() -> None:
             "score = d1 × (d2 + d3 + d4) ∈ [0..6])."
         ),
         "scope": (
-            f"Tier 2: union of top-{TOP_K} from {len(RETRIEVERS)} retrievers. "
-            "v0.2.0 will extend to top-20 union when Tier 3 lands."
+            f"Tier 3: union of top-{TOP_K} from {len(RETRIEVERS)} retrievers — "
+            "230,964 judged (q, c) pairs. Top-3 union (Tier 2's scope) is a "
+            "strict subset, recoverable from rankings.parquet with rank <= 3."
         ),
+        "previous_version": {
+            "version": "v0.1.0",
+            "scope": f"Tier 2: union of top-3, 36,418 judged pairs.",
+            "build_commit": "02127e3",
+        },
         "judge": judge,
         "query_generator": query_generator,
         "retrievers": [
