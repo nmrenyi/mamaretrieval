@@ -161,6 +161,21 @@ Of the chunks judged relevant in the 6-retriever top-20 union pool, what fractio
 | bm25       | 0.088 | 0.122 | 0.183 | 0.271 |
 | medcpt     | 0.071 | 0.101 | 0.159 | 0.244 |
 
+### Pool Recall — strict (score ≥ 5)
+
+Same computation restricted to strict-relevant chunks (complete / specific actionable content: doses, thresholds, management steps), over the 2,989 queries with ≥1 strict-relevant chunk in the pool (avg 7.5 strict-relevant chunks per query, vs 20.4 lenient).
+
+| Retriever | Pool R@3 | Pool R@5 | Pool R@10 | Pool R@20 |
+|---|---:|---:|---:|---:|
+| **voyage** | **0.267** | **0.368** | **0.544** | **0.768** |
+| octen      | 0.240 | 0.327 | 0.471 | 0.661 |
+| lateon     | 0.212 | 0.277 | 0.395 | 0.540 |
+| gecko      | 0.120 | 0.169 | 0.242 | 0.345 |
+| bm25       | 0.110 | 0.145 | 0.207 | 0.283 |
+| medcpt     | 0.078 | 0.106 | 0.162 | 0.234 |
+
+The strict view *widens* the deployment gap: at k=20 gecko captures 34.5% of strict-relevant chunks vs voyage's 76.8% (2.2×, vs 2.0× lenient). Notably, gecko's strict pool recall (0.345) is essentially equal to its lenient one (0.337) — moving the bar from "any useful content" to "complete, actionable content" doesn't change what gecko finds, while every top-tier retriever improves (voyage 0.658 → 0.768). At strict, gecko sits closer to bm25 (0.283) than to the dense top tier. The chunks the generator most needs are exactly the ones the deployed retriever most fails to surface — at any rank in its top-20.
+
 ### Key findings from Tier 3
 
 1. **HR@3 numbers are identical to Tier 2** (same top-3 chunks judged in both tiers). The new value is at k=5, 10, 20 and in Pool Recall.
@@ -169,7 +184,7 @@ Of the chunks judged relevant in the 6-retriever top-20 union pool, what fractio
    - At lenient (≥3): gecko HR@3 = 0.81 → HR@20 = 0.98 — the chunks ARE in gecko's pool, just not in its top-3. Depth-based interventions (issue #17 option 1: threshold calibration, or retrieving deeper) could substantially close this gap.
    - At strict (≥5): gecko HR@3 = 0.44 → HR@20 = 0.76 — even at k=20, gecko misses ~24% of queries where voyage finds strict content at k=3. This is a real retrieval gap, not just ranking.
 
-3. **Pool Recall sharply discriminates the two tiers**: voyage captures 66% of pool relevance at k=20; gecko only 34%. Gecko misses about half of the discoverable relevance entirely — never surfaces it in its top-20.
+3. **Pool Recall sharply discriminates the two tiers**: voyage captures 66% of pool relevance at k=20; gecko only 34%. Gecko misses about half of the discoverable relevance entirely — never surfaces it in its top-20. The strict (≥5) view is worse: gecko stays at 0.345 while voyage rises to 0.768 — gecko's deficit is concentrated precisely on the complete/actionable chunks.
 
 4. **The voyage/octen/lateon cluster** stays clearly above the gecko/bm25/medcpt cluster at every depth. The depth-3-only conclusion holds; deeper-k just shrinks gaps on the easier (lenient) metric.
 

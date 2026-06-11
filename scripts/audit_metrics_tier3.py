@@ -15,9 +15,10 @@ the Tier 2 top-3 labels couldn't support.
   capture? Diagnostic for "are weaker retrievers MISSING relevant chunks
   or just RANKING them lower?".
 
-Both binary metrics use the lenient threshold by default for pool recall
-(score >= 3); the rationale is that's the "useful clinical content"
-threshold that matters for end-user value.
+Pool Recall is reported at both thresholds: lenient (score >= 3, "useful
+clinical content") and strict (score >= 5, complete/specific actionable
+content). The strict view matters because the deployed retriever's gap is
+widest exactly on the high-quality chunks the generator needs.
 
 Inputs:
   --labels       data/audit/v2_top20_all.jsonl  (full top-20 union labels)
@@ -135,6 +136,7 @@ def main() -> int:
             rs[f"binary_lenient_@{k}"] = binary_at_k(retr, rel_lenient, k)
             rs[f"binary_strict_@{k}"] = binary_at_k(retr, rel_strict, k)
             rs[f"pool_recall_lenient_@{k}"] = pool_recall_at_k(retr, rel_lenient, k)
+            rs[f"pool_recall_strict_@{k}"] = pool_recall_at_k(retr, rel_strict, k)
         per_retriever[retr] = rs
 
     # Raw
@@ -225,6 +227,22 @@ def main() -> int:
         row = [retr]
         for k in K_VALUES:
             row.append(fmt(per_retriever[retr][f"pool_recall_lenient_@{k}"]))
+        md.append("| " + " | ".join(row) + " |")
+    md.append("")
+    md.append("## Pool Recall — strict (score ≥ 5)")
+    md.append("")
+    md.append(
+        "Same computation restricted to strict-relevant chunks (complete / "
+        "specific actionable content), over queries with ≥1 strict-relevant "
+        "chunk in the pool."
+    )
+    md.append("")
+    md.append("| Retriever | " + " | ".join(f"Pool R@{k}" for k in K_VALUES) + " |")
+    md.append("|---" + "|---:" * len(K_VALUES) + "|")
+    for retr in RETRIEVERS:
+        row = [retr]
+        for k in K_VALUES:
+            row.append(fmt(per_retriever[retr][f"pool_recall_strict_@{k}"]))
         md.append("| " + " | ".join(row) + " |")
     md.append("")
     md.append("---")
