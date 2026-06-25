@@ -4,7 +4,7 @@
 
 ## Overview
 
-Two-tier evaluation of 6 retrievers (bm25, medcpt, octen, voyage-4-large, lateon, gecko) at deployment depth k=3:
+Two-tier evaluation of 7 retrievers (bm25, medcpt, octen, voyage-4-large, lateon, gecko, and EmbeddingGemma — the deployed on-device retriever, added to the Tier 2 scoreboard after the original run; see [EmbeddingGemma provenance](#embeddinggemma-provenance)) at deployment depth k=3:
 
 - **Tier 1 pilot** (2026-05-17): 100 audit queries × 6 retrievers, **1,150 (q, c) pairs**. Used to validate the v2 graded rubric and the production Qwen judge against Claude Opus 4.7 reference labels before scaling. See [`notes/rubric_design_worked_examples.md` § Tier 1 pilot validation](notes/rubric_design_worked_examples.md#tier-1-pilot-validation--qwen-judge-vs-opus-47-reference-labels-2026-05-17) for the calibration data (95% threshold agreement at score ≥ 3, 85% at ≥ 5).
 - **Tier 2 full audit** (2026-05-18): 3,185 queries × 6 retrievers, **36,418 (q, c) pairs**. Same rubric, same judge, same thinking budgets as Tier 1.
@@ -22,12 +22,13 @@ All metrics use the deployment-honest convention: queries with no chunk meeting 
 
 ## Tier 2 scoreboard (n=3,185 queries, headline result)
 
-Computed by `scripts/audit_metrics_v2.py --labels data/audit/v2_full_h100.jsonl --rankings-dir data/full`.
+Computed by `scripts/audit_metrics_v2.py --labels data/audit/v2_full_h100_with_embeddinggemma.jsonl --rankings-dir data/full` (the labels file is the Tier 2 top-3 union of 36,418 pairs plus 2,577 EmbeddingGemma-only pairs judged by the same Qwen3.5-397B / v2 graded judge — see [EmbeddingGemma provenance](#embeddinggemma-provenance)).
 
 | Retriever | HR (≥3) | P (≥3) | HR (≥5) | P (≥5) | wHR | wP |
 |---|---:|---:|---:|---:|---:|---:|
 | **voyage** | **0.996** | **0.867** | **0.753** | **0.452** | **0.860** | **0.682** |
 | octen      | 0.991 | 0.804 | 0.716 | 0.403 | 0.847 | 0.637 |
+| embeddinggemma (deployed) | 0.985 | 0.784 | 0.704 | 0.388 | 0.838 | 0.619 |
 | lateon     | 0.971 | 0.738 | 0.664 | 0.350 | 0.815 | 0.581 |
 | gecko      | 0.814 | 0.477 | 0.439 | 0.193 | 0.662 | 0.393 |
 | bm25       | 0.754 | 0.417 | 0.371 | 0.163 | 0.602 | 0.338 |
@@ -35,13 +36,21 @@ Computed by `scripts/audit_metrics_v2.py --labels data/audit/v2_full_h100.jsonl 
 
 ### Three-tier reading
 
-1. **Top tier — voyage > octen > lateon**: all three deliver any-relevant content in 97-99% of queries. Voyage takes a clear lead at scale (was tied with octen at Tier 1): higher P(≥3) by ~6 pp, higher wP by ~5 pp.
-2. **Middle — gecko** (on-device deployed retriever): HR drops to 0.81 lenient / 0.44 strict; precision roughly half the top tier. Substantial structural gap (see [issue #17](https://github.com/nmrenyi/mamaretrieval/issues/17) for remediation options).
+1. **Top tier — voyage > octen > embeddinggemma > lateon**: all four deliver any-relevant content in 97-99% of queries. Voyage takes a clear lead at scale (was tied with octen at Tier 1): higher P(≥3) by ~6 pp, higher wP by ~5 pp. **EmbeddingGemma — the current deployed on-device retriever (rag-bundle-v0.3.0) — slots into the top tier in third place**, between octen and lateon on every metric: HR(≥3) 0.985, P(≥3) 0.784, wP 0.619. A 300M int8 model running on-device lands within ~8 pp P(≥3) of cloud voyage-4-large.
+2. **Middle — gecko** (the earlier on-device candidate): HR drops to 0.81 lenient / 0.44 strict; precision roughly half the top tier. EmbeddingGemma is **+30.7 pp P(≥3) over gecko** (0.784 vs 0.477) — the on-device retriever swap from gecko to EmbeddingGemma closes essentially the entire deployment gap that motivated [issue #17](https://github.com/nmrenyi/mamaretrieval/issues/17).
 3. **Bottom — bm25, medcpt**: bm25's lexical overlap matches gecko on raw HR(≥3) but with lower precision; medcpt is the weakest across every metric.
 
 ### Honest read of the strict numbers
 
 Even the best retriever (voyage) surfaces a strict-relevant (score ≥ 5) chunk in only **75% of queries** with **45% of the top-3 being strict-relevant**. The ~25% of queries with no strict-relevant chunk in any retriever's top-3 is an inherent ceiling at depth-3 — pushing past it would require either deeper k or a broader candidate pool, not just a better re-ranker.
+
+### EmbeddingGemma provenance
+
+EmbeddingGemma was added after the original 6-retriever audit, so its numbers are traceable to a distinct, matched run:
+
+- **Model / encoding**: `litert-community/embeddinggemma-300m` (the shipped on-device int8 LiteRT build, `embeddinggemma-300M_seq256_mixed-precision.tflite`). Query prompt `"task: search result | query: "`, doc prompt `"title: none | text: "`, seq-len 256, 768-dim, L2-normalised, cosine. Corpus document vectors were taken **as deployed** from `rag-bundle-v0.3.0/runtime/embeddings.sqlite` (not re-embedded); chunk IDs recovered via `sha256(chunk_text)[:16]`, verified against the benchmark CIDs.
+- **Retrieval**: `scripts/retrieve_embeddinggemma_full.py` → top-20 per query → `data/full/embeddinggemma_top20.jsonl` (3,185 queries).
+- **Pooling / judging**: EmbeddingGemma's top-3 introduced **2,577 (query, chunk) pairs** absent from the original 6-retriever top-3 union (6,978 of its 9,555 top-3 pairs were already judged). Those 2,577 were judged by the **same** Qwen3.5-397B-A17B-FP8 / v2 graded judge — prompt hash `9d2abdfb76b030ea`, schema `v-88c09262`, soft/hard thinking budget 10k/25k, temperature 0 — on a single H200 shard (0 errored rows). Merged with the existing 36,418 labels → 38,995 total (`data/audit/v2_full_h100_with_embeddinggemma.jsonl`). The six original retrievers' published numbers reproduce **exactly** against the merged labels, confirming the merge introduced no drift.
 
 ---
 
@@ -97,12 +106,13 @@ Even the best retriever (voyage) surfaces a strict-relevant (score ≥ 5) chunk 
 
 ## Source files
 
-- Tier 2 results: `data/audit/results_v2_full.{md,json}` (auto-generated, gitignored)
+- Tier 2 results (7 retrievers): `data/audit/results_v2_full_eg.{md,json}` (auto-generated, gitignored). Pre-EmbeddingGemma 6-retriever results: `data/audit/results_v2_full.{md,json}`.
 - Tier 1 results: `data/audit/results_v2.{md,json}`
-- Labels: `data/audit/v2_full_h100.jsonl` (merged shards, gitignored)
-- Candidates: `data/audit/candidates_v2_full.jsonl`
-- Per-retriever rankings: `data/full/{bm25,medcpt,octen,voyage,lateon,gecko}_top20.jsonl`
-- Metrics regen: `python3 scripts/audit_metrics_v2.py --labels data/audit/v2_full_h100.jsonl --rankings-dir data/full --report data/audit/results_v2_full.md --raw data/audit/results_v2_full.json`
+- Labels: `data/audit/v2_full_h100_with_embeddinggemma.jsonl` (38,995 = 36,418 original + 2,577 EmbeddingGemma-only; gitignored). Original 6-retriever labels: `data/audit/v2_full_h100.jsonl`. EmbeddingGemma-only labels: `data/audit/embeddinggemma_new_labels_h200_shard0.jsonl`.
+- Candidates: `data/audit/candidates_v2_full.jsonl`; EmbeddingGemma new pairs: `data/audit/candidates_embeddinggemma_new.jsonl`
+- Per-retriever rankings: `data/full/{bm25,medcpt,octen,voyage,lateon,gecko,embeddinggemma}_top20.jsonl`
+- EmbeddingGemma retrieval: `python3 scripts/retrieve_embeddinggemma_full.py --sqlite <rag-bundle-v0.3.0/runtime/embeddings.sqlite> --tflite <embeddinggemma-300M_seq256_mixed-precision.tflite> --tokenizer <sentencepiece.model> --queries data/queries.jsonl --out data/full/embeddinggemma_top20.jsonl`
+- Metrics regen: `python3 scripts/audit_metrics_v2.py --labels data/audit/v2_full_h100_with_embeddinggemma.jsonl --rankings-dir data/full --report data/audit/results_v2_full_eg.md --raw data/audit/results_v2_full_eg.json`
 
 ## Follow-ups
 

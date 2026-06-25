@@ -30,7 +30,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-RETRIEVERS = ("bm25", "medcpt", "octen", "voyage", "lateon", "gecko")
+RETRIEVERS = ("bm25", "medcpt", "octen", "voyage", "lateon", "gecko", "embeddinggemma")
 DEFAULT_RANKINGS_DIR = "data/audit"  # Tier 1 layout; pass --rankings-dir data/full for Tier 2
 
 
