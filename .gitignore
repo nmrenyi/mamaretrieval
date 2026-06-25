@@ -36,6 +36,8 @@ data/per_retriever_labels/
 # Tier 2 full-corpus retriever rankings (regenerable from scripts/)
 data/full/
 data/all_query_ids.txt
+# Kenya real-clinician query set (generated; .jsonl siblings already ignored)
+data/kenya_ids.txt
 # Raw-response side files from v2_graded judge runs (potentially large)
 *.raw.jsonl
 
